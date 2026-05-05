@@ -148,8 +148,19 @@
       .ctrl-btn{width:44px;height:44px;}
     }
 
-    /* Receiver */
-    #receiver-mode{display:none;position:fixed;inset:0;background:#000;}
+    /* Chat overlay in OBS receiver */
+    #chat-overlay{position:absolute;bottom:24px;left:16px;right:16px;pointer-events:none;display:flex;flex-direction:column;gap:7px;max-height:38%;overflow:hidden;justify-content:flex-end;}
+    .chat-msg{display:inline-flex;align-items:baseline;gap:7px;background:rgba(0,0,0,.68);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);padding:8px 14px;border-radius:22px;font-family:var(--font);font-size:15px;color:#fff;max-width:90%;word-break:break-word;align-self:flex-start;animation:chatIn .25s ease-out forwards;}
+    .chat-msg.fading{animation:chatOut .8s ease-out forwards;}
+    .chat-name{font-weight:800;flex-shrink:0;line-height:1.3;}
+    .chat-text{font-weight:400;line-height:1.3;opacity:.95;}
+    @keyframes chatIn{from{transform:translateY(12px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+    @keyframes chatOut{from{opacity:1;}to{opacity:0;}}
+
+    /* Channel name input in settings */
+    .channel-input{background:rgba(0,0,0,.3);border:1px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text);font-family:var(--font);font-size:14px;font-weight:600;outline:none;width:140px;text-align:right;}
+    .channel-input:focus{border-color:var(--accent);}
+    .channel-input::placeholder{color:var(--muted);font-weight:400;}
     #remote-video{width:100%;height:100%;object-fit:cover;display:block;}
     #rx-emoji-stage{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
     #rx-emoji-stage .floating-emoji{font-size:56px;bottom:4%;}
@@ -266,6 +277,15 @@
       </div>
     </div>
     <div class="sheet-group">
+      <div class="sheet-group-label">Twitch</div>
+      <div class="sheet-card">
+        <div class="sheet-row">
+          <div><div class="row-label">Channel Name</div><div class="row-sub">Shows chat in OBS overlay</div></div>
+          <input class="channel-input" id="channel-input" type="text" placeholder="your_channel" autocomplete="off" autocorrect="off" autocapitalize="none" oninput="saveChannel(this.value)">
+        </div>
+      </div>
+    </div>
+    <div class="sheet-group">
       <div class="sheet-group-label">Stream Controls</div>
       <div class="sheet-card">
         <div class="sheet-row">
@@ -329,9 +349,11 @@
 <div id="receiver-mode">
   <video id="remote-video" autoplay playsinline></video>
   <div id="rx-emoji-stage"></div>
+  <div id="chat-overlay"></div>
   <div class="rx-overlay" id="rx-overlay">
     <div class="rx-spinner" id="rx-spinner"></div>
     <div class="rx-label" id="rx-label">Connecting&#x2026;</div>
+    <div class="rx-offline" id="rx-offline" style="font-size:11px;color:rgba(255,255,255,.25);margin-top:4px;font-family:var(--font);letter-spacing:.06em;"></div>
     <div class="rx-error" id="rx-error" style="display:none"></div>
   </div>
 </div>
@@ -342,6 +364,7 @@
 <script>
 const params=new URLSearchParams(window.location.search);
 const CAM_ID=params.get('camera'),RX_TOKEN=params.get('token');
+const CHANNEL=params.get('channel')||'';
 const IS_RX=!!(CAM_ID&&RX_TOKEN);
 
 let localStream=null,peer=null,peerIdReady=null,accessKey='';
@@ -351,6 +374,7 @@ let currentRes={width:1920,height:1080},expirySeconds=86400,expiryInterval=null;
 let authenticatedPeers=new Set(),activeConnMap=new Map(),heartbeatInterval=null;
 let streamStartTime=null,streamTimerInt=null,emojiTrayOpen=false,settingsOpen=false;
 let rxPingInterval=null,rxDataConn=null,wakeLock=null;
+let ircWs=null,offlineTimer=null,offlineSince=null;
 
 IS_RX?startReceiver(CAM_ID,RX_TOKEN):startCamera();
 
@@ -358,9 +382,19 @@ function generateKey(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let k='',a=new
 async function hashToken(key){const d=new TextEncoder().encode(key.toUpperCase().replace(/-/g,'').trim());const b=await crypto.subtle.digest('SHA-256',d);return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');}
 
 async function startCamera(){
-  accessKey=generateKey();
+  // Load persistent session — same peer ID + key survive page reloads and brief disconnects
+  accessKey = localStorage.getItem('sc_key') || generateKey();
+  localStorage.setItem('sc_key', accessKey);
+  renderKey();
+
+  // Populate channel input from storage
+  const savedChannel = localStorage.getItem('sc_channel') || '';
+  const chanInput = document.getElementById('channel-input');
+  if (chanInput) chanInput.value = savedChannel;
+
   await initStream();
-  initPeer();
+  // initPeer with stored ID — if available it reclaims the same peer ID so OBS URL stays valid
+  initPeer(localStorage.getItem('sc_peer_id') || null);
   startExpiryTimer();
   requestWakeLock();
 
@@ -418,6 +452,7 @@ function initPeer(reuseId=null){
   peer=new Peer(reuseId||undefined,{config:buildIceConfig()});
   peer.on('open',async id=>{
     peerIdReady=id;
+    localStorage.setItem('sc_peer_id',id); // persist so reconnects reuse same ID
     const token=await hashToken(accessKey);
     const d=document.getElementById('peer-id-display');
     d.textContent=id.slice(0,8).toUpperCase();d.classList.remove('loading');
@@ -596,19 +631,35 @@ async function rotatePeerId(){
   if(heartbeatInterval){clearInterval(heartbeatInterval);heartbeatInterval=null;}
   if(peer){try{peer.destroy();}catch(e){}}
   authenticatedPeers.clear();activeConnMap.clear();activeViewers=0;updateViewerUI();
-  peerIdReady=null; // clear so initPeer(null) gets a brand-new ID
+  peerIdReady=null;
+  localStorage.removeItem('sc_peer_id'); // force fresh ID — user must update OBS URL
   initPeer(null);
   startExpiryTimer();
   showToast('🔄 ID rotated — update OBS','yellow');
 }
 
-function updateObsUrl(id,token){const url=`${window.location.href.split('?')[0]}?camera=${id}&token=${token}`;const el=document.getElementById('obs-url-preview');if(el)el.textContent=url;}
+function regenerateKey(){
+  accessKey=generateKey();
+  localStorage.setItem('sc_key',accessKey);
+  renderKey();updateObsUrlFromState();showToast('🔑 New key — update OBS URL','yellow');
+}
+function saveChannel(val){
+  localStorage.setItem('sc_channel',val.trim().toLowerCase());
+  updateObsUrlFromState();
+}
+
+function updateObsUrl(id,token){
+  const ch=localStorage.getItem('sc_channel')||'';
+  const url=`${window.location.href.split('?')[0]}?camera=${id}&token=${token}${ch?'&channel='+encodeURIComponent(ch):''}`;
+  const el=document.getElementById('obs-url-preview');if(el)el.textContent=url;
+}
 async function updateObsUrlFromState(){if(!peerIdReady)return;const t=await hashToken(accessKey);updateObsUrl(peerIdReady,t);}
 function copyId(){if(!peerIdReady){showToast('Not ready yet','red');return;}navigator.clipboard.writeText(peerIdReady).then(()=>showToast('✓ ID copied','purple')).catch(()=>prompt('Camera ID:',peerIdReady));}
 async function copyObsUrl(){
   if(!peerIdReady){showToast('Not ready yet','red');return;}
   const t=await hashToken(accessKey);
-  const url=`${window.location.href.split('?')[0]}?camera=${peerIdReady}&token=${t}`;
+  const ch=localStorage.getItem('sc_channel')||'';
+  const url=`${window.location.href.split('?')[0]}?camera=${peerIdReady}&token=${t}${ch?'&channel='+encodeURIComponent(ch):''}`;
   navigator.clipboard.writeText(url).then(()=>showToast('✓ OBS URL copied!','purple')).catch(()=>prompt('OBS URL:',url));
 }
 
@@ -624,8 +675,10 @@ function startReceiver(targetId,token){
   document.getElementById('receiver-mode').style.display='block';
   document.title='StreamCam Feed';document.body.style.background='#000';
   peer=new Peer(undefined,{config:buildIceConfig()});
-  peer.on('open',()=>authAndConnect(targetId,token));
+  peer.on('open',()=>{startOfflineTimer();authAndConnect(targetId,token);});
   peer.on('error',e=>{setRxLabel('Error: '+e.type+'. Retrying…');setTimeout(()=>authAndConnect(targetId,token),5000);});
+  // Connect Twitch chat if channel was included in URL
+  if(CHANNEL) connectTwitchChat(CHANNEL);
 }
 function authAndConnect(targetId,token){
   setRxLabel('Connecting…');
@@ -648,13 +701,110 @@ function requestStream(targetId){
   const dummy=createDummyStream();
   let call;try{call=dummy?peer.call(targetId,dummy):null;}catch(e){call=null;}
   if(!call){setRxLabel('Request failed. Retrying…');setTimeout(()=>requestStream(targetId),4000);return;}
-  call.on('stream',s=>{const vid=document.getElementById('remote-video');vid.muted=true;vid.srcObject=s;vid.play().then(()=>setTimeout(()=>{vid.muted=false;},500)).catch(()=>{vid.muted=false;});document.getElementById('rx-overlay').classList.add('hidden');});
-  call.on('close',()=>{if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}document.getElementById('rx-overlay').classList.remove('hidden');setRxLabel('Disconnected. Reconnecting…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
-  call.on('error',()=>{setRxLabel('Error. Reconnecting…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
+  call.on('stream',s=>{
+    const vid=document.getElementById('remote-video');
+    vid.muted=true;vid.srcObject=s;
+    vid.play().then(()=>setTimeout(()=>{vid.muted=false;},500)).catch(()=>{vid.muted=false;});
+    document.getElementById('rx-overlay').classList.add('hidden');
+    stopOfflineTimer();
+  });
+  call.on('close',()=>{if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}document.getElementById('rx-overlay').classList.remove('hidden');startOfflineTimer();setRxLabel('Camera offline — reconnecting');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
+  call.on('error',()=>{startOfflineTimer();setRxLabel('Camera offline — reconnecting');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
   setTimeout(()=>{if(!document.getElementById('remote-video').srcObject){try{call.close();}catch(e){}setRxLabel('Timeout. Retrying…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),2000);}},15000);
 }
 function setRxLabel(msg){document.getElementById('rx-label').textContent=msg;document.getElementById('rx-label').style.display='';document.getElementById('rx-error').style.display='none';document.getElementById('rx-spinner').style.display='';}
 function showRxError(msg){document.getElementById('rx-spinner').style.display='none';document.getElementById('rx-label').style.display='none';const e=document.getElementById('rx-error');e.style.display='';e.textContent=msg;}
+
+// ── Offline timer shown in OBS overlay ─────────────────
+function startOfflineTimer(){
+  stopOfflineTimer();
+  offlineSince=Date.now();
+  offlineTimer=setInterval(()=>{
+    const s=Math.floor((Date.now()-offlineSince)/1000);
+    const m=Math.floor(s/60),sec=s%60;
+    const el=document.getElementById('rx-offline');
+    if(el)el.textContent=m>0?`Camera offline ${m}m ${sec}s`:`Camera offline ${sec}s`;
+  },1000);
+}
+function stopOfflineTimer(){
+  if(offlineTimer){clearInterval(offlineTimer);offlineTimer=null;}
+  offlineSince=null;
+  const el=document.getElementById('rx-offline');
+  if(el)el.textContent='';
+}
+
+// ── Twitch chat overlay via IRC ────────────────────────
+function connectTwitchChat(channel){
+  if(!channel)return;
+  if(ircWs){try{ircWs.close();}catch(e){}}
+  ircWs=new WebSocket('wss://irc.chat.twitch.tv:443');
+  ircWs.onopen=()=>{
+    ircWs.send('CAP REQ :twitch.tv/tags');
+    ircWs.send('PASS SCHMOOPIIE');
+    ircWs.send('NICK justinfan'+Math.floor(80000+Math.random()*10000));
+    ircWs.send('JOIN #'+channel.toLowerCase().trim());
+  };
+  ircWs.onmessage=e=>{
+    const raw=e.data;
+    if(raw.startsWith('PING')){ircWs.send('PONG :tmi.twitch.tv');return;}
+    if(raw.includes('PRIVMSG')){
+      const msg=parseIRC(raw);
+      if(msg)addChatMsg(msg);
+    }
+  };
+  ircWs.onclose=()=>setTimeout(()=>connectTwitchChat(channel),4000);
+  ircWs.onerror=()=>{};
+}
+
+function parseIRC(raw){
+  try{
+    let color='',name='',text='';
+    if(raw.startsWith('@')){
+      const tags=raw.slice(1,raw.indexOf(' ')).split(';');
+      tags.forEach(t=>{
+        const[k,v]=t.split('=');
+        if(k==='color')color=v;
+        if(k==='display-name')name=v;
+      });
+    }
+    if(!name){
+      const m=raw.match(/!([^@]+)@/);
+      name=m?m[1]:'';
+    }
+    const pi=raw.indexOf('PRIVMSG');
+    if(pi===-1)return null;
+    const ti=raw.indexOf(':',pi);
+    if(ti===-1)return null;
+    text=raw.slice(ti+1).trim();
+    if(!name||!text)return null;
+    // Auto-assign a stable color if Twitch didn't set one
+    if(!color||color==='#000000'||color===''){
+      const palette=['#FF6B6B','#FFD93D','#6BCB77','#4D96FF','#C77DFF','#FF9A3C','#00C9FF','#FF61D8'];
+      color=palette[name.charCodeAt(0)%palette.length];
+    }
+    return{name,color,text};
+  }catch(e){return null;}
+}
+
+function addChatMsg({name,color,text}){
+  const stage=document.getElementById('chat-overlay');
+  if(!stage)return;
+  const el=document.createElement('div');
+  el.className='chat-msg';
+  el.innerHTML=`<span class="chat-name" style="color:${escHtml(color)}">${escHtml(name)}</span><span class="chat-text">${escHtml(text)}</span>`;
+  stage.appendChild(el);
+  // Keep max 6 messages visible
+  const all=stage.querySelectorAll('.chat-msg');
+  if(all.length>6)all[0].remove();
+  // Fade out after 12 seconds
+  setTimeout(()=>{
+    el.classList.add('fading');
+    setTimeout(()=>el.remove(),800);
+  },12000);
+}
+
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
 </script>
 </body>
 </html>
