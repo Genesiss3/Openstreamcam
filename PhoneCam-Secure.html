@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>PhoneCam Secure</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #080c10;
+      --surface: #0f1419;
+      --surface2: #161d26;
+      --border: #1e2a38;
+      --accent: #00e5ff;
+      --accent2: #ff3d6b;
+      --green: #00ff87;
+      --yellow: #ffd600;
+      --text: #e8edf2;
+      --muted: #4a5a6a;
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-display: 'Syne', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font-mono); min-height: 100dvh; overflow-x: hidden; }
+
+    /* ── LAYOUT ────────────────────────────────── */
+    #camera-mode { display: flex; flex-direction: column; min-height: 100dvh; overflow-y: auto; }
+
+    /* ── HEADER ────────────────────────────────── */
+    .cam-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      background: var(--surface); position: sticky; top: 0; z-index: 20;
+    }
+    .logo { font-family: var(--font-display); font-weight: 800; font-size: 17px; }
+    .logo span { color: var(--accent); }
+    .logo sub { font-size: 9px; color: var(--green); letter-spacing: 0.1em; vertical-align: middle; margin-left: 4px; font-family: var(--font-mono); font-weight: 700; }
+
+    .header-right { display: flex; gap: 8px; align-items: center; }
+
+    .status-pill {
+      display: flex; align-items: center; gap: 5px; padding: 4px 10px;
+      border-radius: 100px; border: 1px solid var(--border);
+      font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+      background: var(--surface2); color: var(--muted); text-transform: uppercase; transition: all 0.3s;
+    }
+    .status-pill.connected { border-color: var(--green); color: var(--green); background: rgba(0,255,135,0.07); }
+    .status-pill.streaming { border-color: var(--accent2); color: var(--accent2); background: rgba(255,61,107,0.08); }
+    .status-pill.locked { border-color: var(--yellow); color: var(--yellow); background: rgba(255,214,0,0.07); }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .dot.pulse { animation: pulse 1.1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.25} }
+
+    .lock-btn {
+      display: flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--muted); font-family: var(--font-mono);
+      font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+      cursor: pointer; transition: all 0.15s; -webkit-tap-highlight-color: transparent;
+    }
+    .lock-btn:active { transform: scale(0.94); }
+    .lock-btn.locked { border-color: var(--yellow); color: var(--yellow); background: rgba(255,214,0,0.08); }
+    .lock-btn svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ── VIDEO ─────────────────────────────────── */
+    .video-wrap {
+      position: relative; background: #000; flex-shrink: 0; height: 220px; overflow: hidden;
+    }
+    #local-video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
+    #local-video.rear { transform: scaleX(1); }
+
+    .corner { position: absolute; width: 18px; height: 18px; border-color: var(--accent); border-style: solid; opacity: 0.6; }
+    .corner.tl { top: 8px; left: 8px; border-width: 2px 0 0 2px; }
+    .corner.tr { top: 8px; right: 8px; border-width: 2px 2px 0 0; }
+    .corner.bl { bottom: 8px; left: 8px; border-width: 0 0 2px 2px; }
+    .corner.br { bottom: 8px; right: 8px; border-width: 0 2px 2px 0; }
+
+    .rec-badge {
+      position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+      display: none; align-items: center; gap: 5px;
+      background: rgba(255,61,107,0.92); color: white;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+      padding: 3px 9px; border-radius: 4px; text-transform: uppercase;
+    }
+    .rec-badge.show { display: flex; }
+
+    /* Flash on new connection */
+    .video-wrap.flash { animation: vidFlash 0.6s ease-out; }
+    @keyframes vidFlash { 0%{box-shadow:inset 0 0 0 3px var(--green)}100%{box-shadow:inset 0 0 0 3px transparent} }
+
+    /* ── CAM CONTROLS ──────────────────────────── */
+    .cam-controls {
+      display: flex; align-items: center; justify-content: space-around;
+      padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .icon-btn {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+      padding: 9px 13px; cursor: pointer; color: var(--muted);
+      font-size: 9px; font-family: var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase;
+      transition: all 0.15s; -webkit-tap-highlight-color: transparent; user-select: none;
+    }
+    .icon-btn:active { transform: scale(0.94); }
+    .icon-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,0.07); }
+    .icon-btn svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ── RES ROW ───────────────────────────────── */
+    .res-row {
+      display: flex; gap: 6px; padding: 10px 16px; overflow-x: auto;
+      scrollbar-width: none; background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .res-row::-webkit-scrollbar { display: none; }
+    .res-chip {
+      flex-shrink: 0; padding: 5px 11px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--muted); font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s; -webkit-tap-highlight-color: transparent;
+    }
+    .res-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,0.07); }
+    .res-chip:active { transform: scale(0.95); }
+
+    /* ── PANEL ─────────────────────────────────── */
+    .panel { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+
+    .panel-label {
+      font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase;
+      color: var(--muted); font-weight: 700; margin-bottom: 2px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .panel-label svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    .card {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px;
+    }
+    .card.warn { border-color: rgba(255,214,0,0.3); background: rgba(255,214,0,0.04); }
+    .card.success { border-color: rgba(0,255,135,0.25); }
+    .card.danger { border-color: rgba(255,61,107,0.3); background: rgba(255,61,107,0.04); }
+
+    /* ID display */
+    .id-display {
+      font-size: 20px; font-weight: 700; letter-spacing: 0.15em;
+      color: var(--accent); text-align: center; padding: 4px 0 10px;
+    }
+    .id-display.muted { color: var(--muted); font-size: 12px; letter-spacing: 0.05em; padding: 8px 0; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); font-family: var(--font-mono);
+      font-size: 11px; font-weight: 600; cursor: pointer; text-transform: uppercase;
+      letter-spacing: 0.06em; transition: all 0.15s;
+      -webkit-tap-highlight-color: transparent; user-select: none;
+    }
+    .btn:active { transform: scale(0.96); }
+    .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+    .btn.danger-btn { background: rgba(255,61,107,0.15); color: var(--accent2); border-color: rgba(255,61,107,0.4); }
+    .btn.warn-btn { background: rgba(255,214,0,0.1); color: var(--yellow); border-color: rgba(255,214,0,0.35); }
+    .btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ── KEY SECTION ───────────────────────────── */
+    .key-display {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
+    }
+    .key-text {
+      flex: 1; font-size: 16px; font-weight: 700; letter-spacing: 0.18em;
+      color: var(--green); font-family: var(--font-mono); user-select: all;
+    }
+    .key-icon-btn {
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      padding: 4px; border-radius: 4px; transition: color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .key-icon-btn:active { color: var(--accent); }
+    .key-icon-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: block; }
+
+    .key-input-wrap { display: none; margin-bottom: 10px; }
+    .key-input-wrap.show { display: flex; gap: 8px; }
+    .key-input {
+      flex: 1; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 12px; color: var(--text);
+      font-family: var(--font-mono); font-size: 13px; outline: none;
+    }
+    .key-input:focus { border-color: var(--accent); }
+
+    /* ── MAX VIEWERS ───────────────────────────── */
+    .viewer-chips { display: flex; gap: 6px; }
+    .viewer-chip {
+      flex: 1; padding: 8px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--muted); text-align: center;
+      font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+      cursor: pointer; transition: all 0.15s; -webkit-tap-highlight-color: transparent;
+    }
+    .viewer-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,0.07); }
+    .viewer-chip:active { transform: scale(0.95); }
+
+    /* ── EXPIRY TIMER ──────────────────────────── */
+    .expiry-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .expiry-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+    .expiry-time { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: 0.06em; }
+    .expiry-time.urgent { color: var(--accent2); }
+    .rotate-mini-btn {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--muted); padding: 5px 8px; font-size: 10px; font-weight: 600;
+      font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em;
+      cursor: pointer; display: flex; align-items: center; gap: 4px; transition: all 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .rotate-mini-btn:active { transform: scale(0.94); color: var(--accent); border-color: var(--accent); }
+    .rotate-mini-btn svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ── TURN CONFIG ───────────────────────────── */
+    .collapsible-header {
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+    }
+    .collapsible-header svg { width: 14px; height: 14px; stroke: var(--muted); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
+    .collapsible-header.open svg { transform: rotate(180deg); }
+    .collapsible-body { display: none; margin-top: 12px; }
+    .collapsible-body.open { display: block; }
+
+    .field-label { font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+    .field-input {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 7px; padding: 9px 11px; color: var(--text);
+      font-family: var(--font-mono); font-size: 12px; outline: none; margin-bottom: 8px;
+    }
+    .field-input:focus { border-color: var(--accent); }
+    .turn-note { font-size: 10px; color: var(--muted); line-height: 1.5; margin-top: 4px; }
+    .turn-note a { color: var(--accent); text-decoration: none; }
+
+    /* ── CONNECTION LOG ────────────────────────── */
+    .log-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+    .log-entry {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 7px 10px; border-radius: 6px; border: 1px solid transparent;
+      font-size: 11px; line-height: 1.4;
+    }
+    .log-entry.ok { background: rgba(0,255,135,0.05); border-color: rgba(0,255,135,0.15); }
+    .log-entry.fail { background: rgba(255,61,107,0.05); border-color: rgba(255,61,107,0.15); }
+    .log-entry.info { background: rgba(0,229,255,0.04); border-color: rgba(0,229,255,0.12); }
+    .log-entry.warn { background: rgba(255,214,0,0.04); border-color: rgba(255,214,0,0.15); }
+    .log-icon { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .log-entry.ok .log-icon { stroke: var(--green); }
+    .log-entry.fail .log-icon { stroke: var(--accent2); }
+    .log-entry.info .log-icon { stroke: var(--accent); }
+    .log-entry.warn .log-icon { stroke: var(--yellow); }
+    .log-time { color: var(--muted); flex-shrink: 0; font-size: 10px; margin-top: 1px; }
+    .log-msg { color: var(--text); flex: 1; }
+    .log-empty { color: var(--muted); font-size: 11px; text-align: center; padding: 16px; }
+
+    /* ── OBS URL ───────────────────────────────── */
+    .obs-url {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+      padding: 8px 10px; font-size: 10px; color: var(--accent2); word-break: break-all;
+      line-height: 1.6; margin-top: 8px;
+    }
+
+    /* ── ACTIVE VIEWER INDICATOR ───────────────── */
+    .viewer-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; margin-top: 8px;
+    }
+    .viewer-count { font-size: 12px; color: var(--muted); }
+    .viewer-count strong { color: var(--text); font-size: 15px; }
+    .viewer-dots { display: flex; gap: 5px; }
+    .viewer-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); transition: all 0.3s; }
+    .viewer-dot.active { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+    /* ── TOAST / ALERT ─────────────────────────── */
+    #toast {
+      position: fixed; bottom: 20px; left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 10px 18px; border-radius: 8px; z-index: 9999;
+      transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+    #toast.green { background: var(--green); color: #000; }
+    #toast.red { background: var(--accent2); color: #fff; }
+    #toast.blue { background: var(--accent); color: #000; }
+    #toast.yellow { background: var(--yellow); color: #000; }
+
+    /* Alert overlay (new connection) */
+    #alert-overlay {
+      position: fixed; inset: 0; z-index: 100; pointer-events: none;
+      display: flex; align-items: flex-start; justify-content: center; padding-top: 60px;
+    }
+    .alert-banner {
+      background: var(--green); color: #000; font-weight: 700;
+      font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 12px 22px; border-radius: 10px;
+      transform: translateY(-100px) scale(0.8); opacity: 0;
+      transition: all 0.35s cubic-bezier(0.34,1.56,0.64,1);
+      display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .alert-banner.show { transform: translateY(0) scale(1); opacity: 1; }
+    .alert-banner.hide { transform: translateY(-100px) scale(0.8); opacity: 0; }
+
+    /* Divider */
+    .divider { height: 1px; background: var(--border); margin: 0 16px; }
+
+    /* ═══════════════ RECEIVER MODE ═══════════════ */
+    #receiver-mode { display: none; position: fixed; inset: 0; background: #000; }
+    #remote-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .rx-overlay {
+      position: absolute; inset: 0; display: flex; align-items: center;
+      justify-content: center; flex-direction: column; gap: 14px;
+      background: rgba(0,0,0,0.88); transition: opacity 0.5s;
+    }
+    .rx-overlay.hidden { opacity: 0; pointer-events: none; }
+    .rx-spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .rx-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    .rx-error { font-size: 11px; letter-spacing: 0.08em; color: var(--accent2); text-align: center; padding: 0 24px; }
+
+    @media (min-height: 700px) { .video-wrap { height: 260px; } }
+  </style>
+</head>
+<body>
+
+<!-- ══════════════════════ CAMERA MODE ══════════════════════ -->
+<div id="camera-mode">
+
+  <div class="cam-header">
+    <div class="logo">Phone<span>Cam</span><sub>SECURE</sub></div>
+    <div class="header-right">
+      <button class="lock-btn" id="lock-stream-btn" onclick="toggleStreamLock()">
+        <svg id="lock-icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span id="lock-text">Unlocked</span>
+      </button>
+      <div class="status-pill" id="status-pill">
+        <div class="dot" id="status-dot"></div>
+        <span id="status-text">Init</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="video-wrap" id="video-wrap">
+    <video id="local-video" autoplay muted playsinline></video>
+    <div style="position:absolute;inset:0;pointer-events:none">
+      <div class="corner tl"></div><div class="corner tr"></div>
+      <div class="corner bl"></div><div class="corner br"></div>
+      <div class="rec-badge" id="rec-badge"><div class="dot pulse" style="background:white"></div>LIVE</div>
+    </div>
+  </div>
+
+  <div class="cam-controls">
+    <button class="icon-btn" id="btn-flip" onclick="flipCamera()">
+      <svg viewBox="0 0 24 24"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+      Flip
+    </button>
+    <button class="icon-btn active" id="btn-mic" onclick="toggleMic()">
+      <svg id="mic-icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+      Mic
+    </button>
+    <button class="icon-btn active" id="btn-video" onclick="toggleVideo()">
+      <svg viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+      Camera
+    </button>
+    <button class="icon-btn" id="btn-torch" onclick="toggleTorch()" style="display:none">
+      <svg viewBox="0 0 24 24"><path d="M9.663 17h4.673M12 3v1M6.343 6.343l-.707-.707M3 12H2M21 12h-1M18.364 6.343l.707-.707M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>
+      Torch
+    </button>
+  </div>
+
+  <div class="res-row">
+    <div class="res-chip" onclick="setRes(640,360,'360p',this)">360p</div>
+    <div class="res-chip active" onclick="setRes(1280,720,'720p',this)">720p HD</div>
+    <div class="res-chip" onclick="setRes(1920,1080,'1080p',this)">1080p FHD</div>
+  </div>
+
+  <!-- ── CONNECTION PANEL ─────────────────────── -->
+  <div class="panel">
+
+    <div>
+      <div class="panel-label">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8.56 2.75c4.37 6.03 6.02 9.42 8.03 17.72m2.54-15.38c-3.72 4.35-8.94 5.66-16.88 5.85m19.5 1.9c-3.5-.93-6.63-.82-8.94 0-2.58.92-5.01 2.86-7.44 6.32"/></svg>
+        Camera ID
+      </div>
+      <div class="card">
+        <div class="id-display muted" id="peer-id-display">Connecting…</div>
+        <div class="two-col">
+          <button class="btn" onclick="copyId()">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            Copy ID
+          </button>
+          <button class="btn primary" onclick="copyObsUrl()">
+            <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            OBS URL
+          </button>
+        </div>
+        <div class="obs-url" id="obs-url-preview">Waiting for peer ID…</div>
+        <div class="viewer-bar">
+          <div class="viewer-count">Active: <strong id="viewer-count">0</strong> / <span id="max-viewer-label">1</span></div>
+          <div class="viewer-dots" id="viewer-dots">
+            <div class="viewer-dot"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- ── SECURITY PANEL ───────────────────────── -->
+    <div>
+      <div class="panel-label">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Security
+      </div>
+
+      <!-- Access Key -->
+      <div class="card" style="margin-bottom:10px">
+        <div class="field-label">Access Key — required to connect</div>
+        <div class="key-display">
+          <div class="key-text" id="key-display">••••••••••••</div>
+          <button class="key-icon-btn" onclick="toggleKeyVisibility()" title="Show/hide key">
+            <svg id="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+          <button class="key-icon-btn" onclick="copyKey()" title="Copy key">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="key-icon-btn" onclick="toggleKeyEdit()" title="Custom key">
+            <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+        </div>
+        <div class="key-input-wrap" id="key-input-wrap">
+          <input class="key-input" id="key-input" type="text" placeholder="Enter custom key…" maxlength="32" />
+          <button class="btn" style="flex-shrink:0;padding:0 14px" onclick="applyCustomKey()">Set</button>
+        </div>
+        <div class="two-col">
+          <button class="btn" onclick="regenerateKey()">
+            <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            New Key
+          </button>
+          <button class="btn warn-btn" onclick="copyKey()">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            Copy Key
+          </button>
+        </div>
+      </div>
+
+      <!-- Max viewers -->
+      <div class="card" style="margin-bottom:10px">
+        <div class="field-label" style="margin-bottom:8px">Max Simultaneous Viewers</div>
+        <div class="viewer-chips">
+          <div class="viewer-chip active" id="vc-1" onclick="setMaxViewers(1)">1</div>
+          <div class="viewer-chip" id="vc-2" onclick="setMaxViewers(2)">2</div>
+          <div class="viewer-chip" id="vc-3" onclick="setMaxViewers(3)">3</div>
+          <div class="viewer-chip" id="vc-4" onclick="setMaxViewers(4)">4</div>
+        </div>
+      </div>
+
+      <!-- ID Expiry -->
+      <div class="card" style="margin-bottom:10px">
+        <div class="field-label" style="margin-bottom:8px">Camera ID Auto-Rotation</div>
+        <div class="expiry-row">
+          <div>
+            <div class="expiry-label">Expires in</div>
+            <div class="expiry-time" id="expiry-display">24:00:00</div>
+          </div>
+          <button class="rotate-mini-btn" onclick="rotatePeerId()">
+            <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Rotate Now
+          </button>
+        </div>
+      </div>
+
+      <!-- TURN config (advanced) -->
+      <div class="card warn">
+        <div class="collapsible-header" id="turn-header" onclick="toggleTurnConfig()">
+          <div class="field-label" style="margin:0">
+            <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:var(--yellow);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span style="color:var(--yellow)">TURN Server (Advanced)</span>
+          </div>
+          <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="collapsible-body" id="turn-body">
+          <div style="margin-top:12px">
+            <div class="field-label">TURN URL</div>
+            <input class="field-input" id="turn-url" placeholder="turn:your.server.com:3478" />
+            <div class="field-label">Username</div>
+            <input class="field-input" id="turn-user" placeholder="username" />
+            <div class="field-label">Credential</div>
+            <input class="field-input" id="turn-pass" type="password" placeholder="password" />
+            <button class="btn" style="width:100%;" onclick="applyTurnConfig()">
+              <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              Apply & Reconnect
+            </button>
+            <div class="turn-note" style="margin-top:8px">
+              ⚠ Default uses OpenRelay (public, shared). For production streams use a private TURN server.<br>
+              Free options: <a href="https://www.metered.ca/tools/openrelay/" target="_blank">Metered.ca</a> · <a href="https://developers.cloudflare.com/calls/" target="_blank">Cloudflare Calls</a> · <a href="https://www.twilio.com/docs/stun-turn" target="_blank">Twilio</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- ── CONNECTION LOG ──────────────────────── -->
+    <div>
+      <div class="panel-label" style="justify-content:space-between">
+        <span style="display:flex;align-items:center;gap:6px">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          Security Log
+        </span>
+        <button onclick="clearLog()" style="background:none;border:none;color:var(--muted);font-family:var(--font-mono);font-size:9px;text-transform:uppercase;letter-spacing:0.1em;cursor:pointer;">Clear</button>
+      </div>
+      <div class="card">
+        <div class="log-list" id="log-list">
+          <div class="log-empty" id="log-empty">No events yet</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="height:20px"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════ RECEIVER MODE ═════════════════════ -->
+<div id="receiver-mode">
+  <video id="remote-video" autoplay playsinline></video>
+  <div class="rx-overlay" id="rx-overlay">
+    <div class="rx-spinner" id="rx-spinner"></div>
+    <div class="rx-label" id="rx-label">Authenticating…</div>
+    <div class="rx-error" id="rx-error" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Alert overlay -->
+<div id="alert-overlay">
+  <div class="alert-banner" id="alert-banner">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.38 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.56a16 16 0 0 0 6 6l.94-.94a2 2 0 0 1 2.25-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 21.73 16z"/></svg>
+    <span id="alert-msg">New viewer connected</span>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  PhoneCam Secure — Hardened WebRTC phone camera for OBS
+// ══════════════════════════════════════════════════════════════
+
+const params  = new URLSearchParams(window.location.search);
+const CAM_ID  = params.get('camera');
+const RX_TOKEN = params.get('token');
+const IS_RX   = !!(CAM_ID && RX_TOKEN);
+
+// ── State ──────────────────────────────────────────────────────
+let localStream     = null;
+let peer            = null;
+let peerIdReady     = null;
+let accessKey       = '';
+let maxViewers      = 1;
+let activeViewers   = 0;
+let streamLocked    = false;
+let keyVisible      = false;
+let keyEditOpen     = false;
+let micEnabled      = true;
+let videoEnabled    = true;
+let facingMode      = 'environment';
+let torchEnabled    = false;
+let currentRes      = { width: 1280, height: 720 };
+let expirySeconds   = 86400; // 24h
+let expiryInterval  = null;
+let customTurn      = null;
+let authenticatedPeers = new Set(); // peer IDs that passed auth, awaiting call
+let activeConnMap     = new Map();  // peerId → { dataConn, lastPing, callRef }
+let heartbeatInterval = null;       // cleanup interval on camera side
+
+// ── Entry point ────────────────────────────────────────────────
+IS_RX ? startReceiver(CAM_ID, RX_TOKEN) : startCamera();
+
+// ══════════════════════════════════════════════════════════════
+//  CRYPTO HELPERS
+// ══════════════════════════════════════════════════════════════
+
+function generateKey() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let k = '';
+  const arr = new Uint8Array(12);
+  crypto.getRandomValues(arr);
+  for (let i = 0; i < 12; i++) {
+    if (i > 0 && i % 4 === 0) k += '-';
+    k += chars[arr[i] % chars.length];
+  }
+  return k;
+}
+
+async function hashToken(key) {
+  const data = new TextEncoder().encode(key.toUpperCase().replace(/-/g,'').trim());
+  const buf  = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  CAMERA MODE
+// ══════════════════════════════════════════════════════════════
+
+async function startCamera() {
+  accessKey = generateKey();
+  await initStream();
+  initPeer();
+  startExpiryTimer();
+  secLog('info', 'PhoneCam Secure started');
+}
+
+function buildIceConfig() {
+  const base = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ];
+  if (customTurn) {
+    base.push({
+      urls: customTurn.url,
+      username: customTurn.username,
+      credential: customTurn.credential
+    });
+    secLog('info', 'Using custom TURN server');
+  } else {
+    // Public TURN as fallback (warn)
+    base.push(
+      { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+    );
+    secLog('warn', 'Using public OpenRelay TURN — configure private TURN for production');
+  }
+  return { iceServers: base };
+}
+
+function initPeer() {
+  if (peer) { try { peer.destroy(); } catch(e){} }
+
+  peer = new Peer(undefined, { config: buildIceConfig() });
+
+  peer.on('open', async (id) => {
+    peerIdReady = id;
+    const token = await hashToken(accessKey);
+    const display = document.getElementById('peer-id-display');
+    display.textContent = id.slice(0,8).toUpperCase();
+    display.classList.remove('muted');
+    updateObsUrl(id, token);
+    setStatus('ready', 'Ready');
+    secLog('ok', `Peer ID assigned: ${id.slice(0,8).toUpperCase()}`);
+  });
+
+  peer.on('error', (err) => {
+    setStatus('error', 'Error');
+    secLog('fail', `Peer error: ${err.type}`);
+    if (err.type === 'network' || err.type === 'server-error') {
+      setTimeout(() => initPeer(), 5000);
+    }
+  });
+
+  peer.on('disconnected', () => {
+    setStatus('warn', 'Reconnecting');
+    peer.reconnect();
+  });
+
+  // ── DATA channel: authentication gate ─────────────────────
+  peer.on('connection', async (conn) => {
+    conn.on('data', async (data) => {
+      if (data?.type !== 'auth') return;
+
+      const expected = await hashToken(accessKey);
+      const callerPeer = conn.peer;
+
+      if (streamLocked) {
+        conn.send({ type: 'auth-fail', reason: 'locked', msg: 'Stream is locked by streamer' });
+        conn.close();
+        secLog('warn', `Auth rejected — stream locked (from ${callerPeer.slice(0,8)})`);
+        return;
+      }
+
+      if (activeViewers >= maxViewers) {
+        conn.send({ type: 'auth-fail', reason: 'max', msg: `Max viewers reached (${maxViewers})` });
+        conn.close();
+        secLog('fail', `Auth rejected — max viewers (from ${callerPeer.slice(0,8)})`);
+        return;
+      }
+
+      if (data.token !== expected) {
+        conn.send({ type: 'auth-fail', reason: 'key', msg: 'Invalid access key' });
+        conn.close();
+        secLog('fail', `Auth FAILED — wrong key (from ${callerPeer.slice(0,8)})`);
+        showToast('⚠ Auth failed — wrong key', 'red');
+        triggerAlert('⚠ Rejected: Invalid Key');
+        return;
+      }
+
+      // Auth passed — keep data conn open for heartbeat
+      authenticatedPeers.add(callerPeer);
+      activeConnMap.set(callerPeer, { dataConn: conn, lastPing: Date.now(), callRef: null });
+      conn.send({ type: 'auth-ok' });
+      secLog('ok', `Auth passed (from ${callerPeer.slice(0,8)})`);
+
+      // Handle heartbeat pings from receiver
+      // (data handler already set above — we extend it via the same listener)
+
+      // Clean up auth entry if no call arrives within 20s
+      setTimeout(() => authenticatedPeers.delete(callerPeer), 20000);
+
+      // Handle data conn close / error — viewer went away
+      conn.on('close', () => {
+        const info = activeConnMap.get(callerPeer);
+        if (info?.callRef) { try { info.callRef.close(); } catch(e){} }
+        if (activeConnMap.has(callerPeer)) {
+          activeConnMap.delete(callerPeer);
+          activeViewers = Math.max(0, activeViewers - 1);
+          updateViewerUI();
+          secLog('info', `Viewer disconnected via data channel (${activeViewers}/${maxViewers})`);
+        }
+      });
+      conn.on('error', () => {
+        const info = activeConnMap.get(callerPeer);
+        if (info?.callRef) { try { info.callRef.close(); } catch(e){} }
+        if (activeConnMap.has(callerPeer)) {
+          activeConnMap.delete(callerPeer);
+          activeViewers = Math.max(0, activeViewers - 1);
+          updateViewerUI();
+        }
+      });
+    });
+
+    // Handle ongoing pings on already-open connections
+    conn.on('data', (data) => {
+      if (data?.type === 'ping') {
+        const info = activeConnMap.get(conn.peer);
+        if (info) info.lastPing = Date.now();
+        try { conn.send({ type: 'pong' }); } catch(e){}
+      }
+    });
+  });
+
+  // ── MEDIA calls: only answer authenticated peers ───────────
+  peer.on('call', (call) => {
+    if (!authenticatedPeers.has(call.peer)) {
+      setTimeout(() => { try { call.close(); } catch(e){} }, 500);
+      secLog('fail', `Rejected unauthenticated call from ${call.peer.slice(0,8)}`);
+      return;
+    }
+
+    authenticatedPeers.delete(call.peer); // One-time use
+    call.answer(localStream);
+
+    // Link call to the heartbeat entry
+    const info = activeConnMap.get(call.peer);
+    if (info) {
+      info.callRef = call;
+      info.lastPing = Date.now(); // reset on call start
+    }
+
+    activeViewers++;
+    updateViewerUI();
+    triggerConnectionAlert();
+    secLog('ok', `Viewer streaming (${activeViewers}/${maxViewers})`);
+
+    // call.on('close') fires unreliably in OBS — heartbeat handles cleanup
+    call.on('close', () => cleanupPeer(call.peer, 'call closed'));
+    call.on('error', () => cleanupPeer(call.peer, 'call error'));
+  });
+
+  // ── Heartbeat cleanup — runs every 10s ──────────────────────
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  heartbeatInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [peerId, info] of activeConnMap.entries()) {
+      // Only check peers that have an active call (are counted as viewers)
+      if (!info.callRef) continue;
+      if (now - info.lastPing > 18000) { // 18s no ping = dead connection
+        secLog('warn', `Heartbeat timeout — cleaning up ${peerId.slice(0,8)}`);
+        cleanupPeer(peerId, 'heartbeat timeout');
+      }
+    }
+  }, 8000);
+}
+
+function cleanupPeer(peerId, reason) {
+  if (!activeConnMap.has(peerId)) return; // already cleaned
+  const info = activeConnMap.get(peerId);
+  try { if (info?.callRef) info.callRef.close(); } catch(e){}
+  try { if (info?.dataConn) info.dataConn.close(); } catch(e){}
+  activeConnMap.delete(peerId);
+  activeViewers = Math.max(0, activeViewers - 1);
+  updateViewerUI();
+  secLog('info', `Viewer removed (${reason}) — ${activeViewers}/${maxViewers} active`);
+}
+
+// ── Camera stream ──────────────────────────────────────────────
+async function initStream() {
+  if (localStream) localStream.getTracks().forEach(t => t.stop());
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode, width: { ideal: currentRes.width }, height: { ideal: currentRes.height }, frameRate: { ideal: 30 } },
+      audio: { echoCancellation: true, noiseSuppression: true }
+    });
+    const vid = document.getElementById('local-video');
+    vid.srcObject = localStream;
+    vid.className = facingMode === 'user' ? '' : 'rear';
+    localStream.getAudioTracks().forEach(t => t.enabled = micEnabled);
+    localStream.getVideoTracks().forEach(t => t.enabled = videoEnabled);
+
+    const track = localStream.getVideoTracks()[0];
+    if (track) {
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      document.getElementById('btn-torch').style.display = caps.torch ? 'flex' : 'none';
+    }
+
+    // Replace tracks on live connections
+    if (peer?._connections) {
+      Object.values(peer._connections).forEach(conns =>
+        conns.forEach(conn => {
+          if (conn.peerConnection) {
+            const senders = conn.peerConnection.getSenders();
+            localStream.getTracks().forEach(t => {
+              const s = senders.find(x => x.track?.kind === t.kind);
+              if (s) s.replaceTrack(t);
+            });
+          }
+        })
+      );
+    }
+  } catch (err) {
+    secLog('fail', `Camera access denied: ${err.message}`);
+    alert('Camera permission denied. Please allow access and reload.');
+  }
+}
+
+// ── Camera controls ────────────────────────────────────────────
+function flipCamera() {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  torchEnabled = false;
+  initStream();
+}
+function toggleMic() {
+  micEnabled = !micEnabled;
+  localStream?.getAudioTracks().forEach(t => t.enabled = micEnabled);
+  document.getElementById('btn-mic').classList.toggle('active', micEnabled);
+  const icon = document.getElementById('mic-icon');
+  icon.innerHTML = micEnabled
+    ? '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>'
+    : '<line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23M12 19v4M8 23h8"/>';
+}
+function toggleVideo() {
+  videoEnabled = !videoEnabled;
+  localStream?.getVideoTracks().forEach(t => t.enabled = videoEnabled);
+  document.getElementById('btn-video').classList.toggle('active', videoEnabled);
+}
+async function toggleTorch() {
+  torchEnabled = !torchEnabled;
+  const track = localStream?.getVideoTracks()[0];
+  if (track?.applyConstraints) {
+    try { await track.applyConstraints({ advanced: [{ torch: torchEnabled }] }); } catch(e){}
+  }
+  document.getElementById('btn-torch').classList.toggle('active', torchEnabled);
+}
+function setRes(w, h, label, el) {
+  currentRes = { width: w, height: h };
+  document.querySelectorAll('.res-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  initStream();
+}
+
+// ── Security controls ──────────────────────────────────────────
+function toggleStreamLock() {
+  streamLocked = !streamLocked;
+  const btn = document.getElementById('lock-stream-btn');
+  const icon = document.getElementById('lock-icon');
+  const text = document.getElementById('lock-text');
+  btn.classList.toggle('locked', streamLocked);
+  text.textContent = streamLocked ? 'Locked' : 'Unlocked';
+  icon.innerHTML = streamLocked
+    ? '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'
+    : '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>';
+  setStatus(streamLocked ? 'locked' : (activeViewers > 0 ? 'streaming' : 'ready'),
+            streamLocked ? 'Locked' : (activeViewers > 0 ? `Live (${activeViewers})` : 'Ready'));
+  secLog(streamLocked ? 'warn' : 'info', streamLocked ? 'Stream locked — no new connections allowed' : 'Stream unlocked');
+  showToast(streamLocked ? '🔒 Stream Locked' : '🔓 Stream Unlocked', streamLocked ? 'yellow' : 'blue');
+}
+
+function regenerateKey() {
+  if (activeViewers > 0) {
+    if (!confirm('Regenerating the key will disconnect existing viewers. Continue?')) return;
+  }
+  accessKey = generateKey();
+  renderKey();
+  updateObsUrlFromState();
+  secLog('warn', 'Access key regenerated — update OBS URL');
+  showToast('🔑 New Key Generated', 'yellow');
+}
+
+function applyCustomKey() {
+  const val = document.getElementById('key-input').value.trim();
+  if (val.length < 6) { showToast('Key must be ≥ 6 chars', 'red'); return; }
+  accessKey = val.toUpperCase();
+  renderKey();
+  toggleKeyEdit();
+  updateObsUrlFromState();
+  secLog('info', 'Custom access key set');
+  showToast('✓ Key Updated', 'green');
+}
+
+function renderKey() {
+  document.getElementById('key-display').textContent = keyVisible ? accessKey : '••••••••••••';
+}
+function toggleKeyVisibility() {
+  keyVisible = !keyVisible;
+  renderKey();
+  const icon = document.getElementById('eye-icon');
+  icon.innerHTML = keyVisible
+    ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+    : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+}
+function toggleKeyEdit() {
+  keyEditOpen = !keyEditOpen;
+  document.getElementById('key-input-wrap').classList.toggle('show', keyEditOpen);
+  if (keyEditOpen) document.getElementById('key-input').focus();
+}
+function copyKey() {
+  navigator.clipboard.writeText(accessKey)
+    .then(() => showToast('✓ Key Copied', 'green'))
+    .catch(() => prompt('Your access key:', accessKey));
+}
+
+function setMaxViewers(n) {
+  maxViewers = n;
+  document.querySelectorAll('.viewer-chip').forEach(c => c.classList.remove('active'));
+  document.getElementById(`vc-${n}`).classList.add('active');
+  document.getElementById('max-viewer-label').textContent = n;
+  updateViewerDots();
+  secLog('info', `Max viewers set to ${n}`);
+}
+
+function updateViewerUI() {
+  document.getElementById('viewer-count').textContent = activeViewers;
+  document.getElementById('rec-badge').classList.toggle('show', activeViewers > 0);
+  updateViewerDots();
+  if (activeViewers > 0) setStatus('streaming', `Live (${activeViewers})`);
+  else if (streamLocked) setStatus('locked', 'Locked');
+  else setStatus('ready', 'Ready');
+}
+
+function updateViewerDots() {
+  const container = document.getElementById('viewer-dots');
+  container.innerHTML = '';
+  for (let i = 0; i < maxViewers; i++) {
+    const d = document.createElement('div');
+    d.className = 'viewer-dot' + (i < activeViewers ? ' active' : '');
+    container.appendChild(d);
+  }
+}
+
+// ── ID Expiry ──────────────────────────────────────────────────
+function startExpiryTimer() {
+  if (expiryInterval) clearInterval(expiryInterval);
+  expirySeconds = 86400;
+  expiryInterval = setInterval(() => {
+    expirySeconds--;
+    if (expirySeconds <= 0) { rotatePeerId(); return; }
+    const h = Math.floor(expirySeconds / 3600);
+    const m = Math.floor((expirySeconds % 3600) / 60);
+    const s = expirySeconds % 60;
+    const disp = document.getElementById('expiry-display');
+    disp.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    disp.classList.toggle('urgent', expirySeconds < 300);
+  }, 1000);
+}
+
+async function rotatePeerId() {
+  secLog('warn', 'Camera ID rotating — update your OBS URL');
+  showToast('🔄 ID Rotating — update OBS', 'yellow');
+  peerIdReady = null;
+  document.getElementById('peer-id-display').textContent = 'Rotating…';
+  document.getElementById('peer-id-display').classList.add('muted');
+  document.getElementById('obs-url-preview').textContent = 'Generating new URL…';
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  if (peer) { try { peer.destroy(); } catch(e){} }
+  authenticatedPeers.clear();
+  activeConnMap.clear();
+  activeViewers = 0;
+  updateViewerUI();
+  initPeer();
+  startExpiryTimer();
+}
+
+// ── TURN config ────────────────────────────────────────────────
+function toggleTurnConfig() {
+  const header = document.getElementById('turn-header');
+  const body = document.getElementById('turn-body');
+  header.classList.toggle('open');
+  body.classList.toggle('open');
+}
+
+function applyTurnConfig() {
+  const url  = document.getElementById('turn-url').value.trim();
+  const user = document.getElementById('turn-user').value.trim();
+  const pass = document.getElementById('turn-pass').value.trim();
+  if (!url) { showToast('Enter a TURN URL', 'red'); return; }
+  customTurn = { url, username: user, credential: pass };
+  secLog('ok', `Custom TURN configured: ${url}`);
+  showToast('✓ TURN Configured — reconnecting', 'green');
+  rotatePeerId();
+}
+
+// ── URL / clipboard ────────────────────────────────────────────
+function updateObsUrl(id, token) {
+  const base = window.location.href.split('?')[0];
+  const url  = `${base}?camera=${id}&token=${token}`;
+  document.getElementById('obs-url-preview').textContent = url;
+}
+async function updateObsUrlFromState() {
+  if (!peerIdReady) return;
+  const token = await hashToken(accessKey);
+  updateObsUrl(peerIdReady, token);
+}
+function copyId() {
+  if (!peerIdReady) { showToast('Not ready yet', 'red'); return; }
+  navigator.clipboard.writeText(peerIdReady)
+    .then(() => showToast('✓ ID Copied', 'green'))
+    .catch(() => prompt('Camera ID:', peerIdReady));
+}
+async function copyObsUrl() {
+  if (!peerIdReady) { showToast('Not ready yet', 'red'); return; }
+  const token = await hashToken(accessKey);
+  const base  = window.location.href.split('?')[0];
+  const url   = `${base}?camera=${peerIdReady}&token=${token}`;
+  navigator.clipboard.writeText(url)
+    .then(() => showToast('✓ OBS URL Copied', 'green'))
+    .catch(() => prompt('OBS Browser Source URL:', url));
+}
+
+// ── Status ─────────────────────────────────────────────────────
+function setStatus(type, text) {
+  const pill = document.getElementById('status-pill');
+  const dot  = document.getElementById('status-dot');
+  const span = document.getElementById('status-text');
+  pill.className = 'status-pill';
+  dot.className  = 'dot';
+  span.textContent = text;
+  if (type === 'streaming') { pill.classList.add('streaming'); dot.classList.add('pulse'); }
+  else if (type === 'ready') { pill.classList.add('connected'); }
+  else if (type === 'locked') { pill.classList.add('locked'); }
+}
+
+// ── Alerts ─────────────────────────────────────────────────────
+function triggerConnectionAlert() {
+  document.getElementById('video-wrap').classList.add('flash');
+  setTimeout(() => document.getElementById('video-wrap').classList.remove('flash'), 700);
+  triggerAlert('✓ Viewer Connected');
+}
+function triggerAlert(msg) {
+  const banner = document.getElementById('alert-banner');
+  document.getElementById('alert-msg').textContent = msg;
+  banner.classList.add('show');
+  setTimeout(() => { banner.classList.remove('show'); banner.classList.add('hide'); }, 3000);
+  setTimeout(() => banner.classList.remove('hide'), 3400);
+}
+
+// ── Security Log ───────────────────────────────────────────────
+const LOG_ICONS = {
+  ok:   '<polyline points="20 6 9 17 4 12"/>',
+  fail: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+  info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+  warn: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+};
+
+function secLog(type, msg) {
+  const list = document.getElementById('log-list');
+  const empty = document.getElementById('log-empty');
+  if (empty) empty.remove();
+
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${type}`;
+  entry.innerHTML = `
+    <svg class="log-icon" viewBox="0 0 24 24">${LOG_ICONS[type]}</svg>
+    <span class="log-msg">${msg}</span>
+    <span class="log-time">${time}</span>
+  `;
+  list.insertBefore(entry, list.firstChild);
+
+  // Keep max 30 entries
+  while (list.children.length > 30) list.removeChild(list.lastChild);
+}
+function clearLog() {
+  const list = document.getElementById('log-list');
+  list.innerHTML = '<div class="log-empty" id="log-empty">No events yet</div>';
+}
+
+// ── Toast ──────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, color = 'green') {
+  const t = document.getElementById('toast');
+  if (toastTimer) clearTimeout(toastTimer);
+  t.textContent = msg;
+  t.className = `${color} show`;
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  RECEIVER MODE (OBS Browser Source)
+// ══════════════════════════════════════════════════════════════
+
+function startReceiver(targetId, token) {
+  document.getElementById('camera-mode').style.display = 'none';
+  document.getElementById('receiver-mode').style.display = 'block';
+  document.title = 'PhoneCam — OBS Feed';
+  document.body.style.background = '#000';
+
+  const iceConfig = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+    ]
+  };
+
+  peer = new Peer(undefined, { config: iceConfig });
+
+  peer.on('open', () => {
+    setRxLabel('Authenticating…');
+    authAndConnect(targetId, token);
+  });
+
+  peer.on('error', (err) => {
+    setRxLabel(`Error: ${err.type}. Retrying…`);
+    setTimeout(() => authAndConnect(targetId, token), 5000);
+  });
+}
+
+let rxPingInterval = null; // heartbeat sender on receiver side
+let rxDataConn    = null; // kept alive after auth
+
+function authAndConnect(targetId, token) {
+  setRxLabel('Connecting to camera…');
+
+  // Stop any existing heartbeat
+  if (rxPingInterval) { clearInterval(rxPingInterval); rxPingInterval = null; }
+  if (rxDataConn) { try { rxDataConn.close(); } catch(e){} rxDataConn = null; }
+
+  let dataConn;
+  try { dataConn = peer.connect(targetId, { reliable: true }); } catch(e) {
+    setRxLabel('Connection failed. Retrying…');
+    setTimeout(() => authAndConnect(targetId, token), 4000);
+    return;
+  }
+
+  let authDone = false;
+
+  dataConn.on('open', () => {
+    setRxLabel('Sending credentials…');
+    dataConn.send({ type: 'auth', token });
+  });
+
+  dataConn.on('data', (data) => {
+    if (data?.type === 'auth-ok') {
+      authDone = true;
+      setRxLabel('Authenticated — opening stream…');
+      rxDataConn = dataConn; // keep open — don't close!
+      // Start heartbeat pings every 5 seconds
+      rxPingInterval = setInterval(() => {
+        try { dataConn.send({ type: 'ping' }); } catch(e) {}
+      }, 5000);
+      requestStream(targetId);
+    } else if (data?.type === 'auth-fail') {
+      showRxError(data.reason === 'key'
+        ? '🔑 Invalid access key.\nCheck the OBS URL includes the correct token.'
+        : data.reason === 'locked'
+        ? '🔒 Stream is locked by the streamer.'
+        : data.reason === 'max'
+        ? '👥 Max viewer limit reached.\nAsk the streamer to increase the limit.'
+        : `Connection rejected: ${data.msg}`);
+    }
+  });
+
+  dataConn.on('close', () => {
+    if (rxPingInterval) { clearInterval(rxPingInterval); rxPingInterval = null; }
+    if (authDone) {
+      setRxLabel('Connection lost. Reconnecting…');
+      setTimeout(() => authAndConnect(targetId, RX_TOKEN), 3000);
+    }
+  });
+
+  dataConn.on('error', () => {
+    if (!authDone) {
+      setRxLabel('Auth error. Retrying…');
+      setTimeout(() => authAndConnect(targetId, token), 4000);
+    }
+  });
+
+  setTimeout(() => {
+    if (!authDone) {
+      try { dataConn.close(); } catch(e){}
+      setRxLabel('No response. Retrying…');
+      setTimeout(() => authAndConnect(targetId, token), 4000);
+    }
+  }, 12000);
+}
+
+function createDummyStream() {
+  // Canvas-based dummy — works in OBS CEF without user gesture
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1; canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    ctx.fillRect(0, 0, 1, 1);
+    return canvas.captureStream(1);
+  } catch(e) {
+    try { return new MediaStream(); } catch(e2) { return null; }
+  }
+}
+
+function requestStream(targetId) {
+  const dummyStream = createDummyStream();
+  let call;
+  try {
+    call = dummyStream ? peer.call(targetId, dummyStream) : null;
+  } catch(e) { call = null; }
+
+  if (!call) {
+    setRxLabel('Stream request failed. Retrying…');
+    setTimeout(() => requestStream(targetId), 4000);
+    return;
+  }
+
+  call.on('stream', (remoteStream) => {
+    const vid = document.getElementById('remote-video');
+    // OBS autoplay fix: start muted so browser allows autoplay, then unmute
+    vid.muted  = true;
+    vid.srcObject = remoteStream;
+    vid.play().then(() => {
+      // Small delay before unmuting to ensure playback is stable
+      setTimeout(() => { vid.muted = false; }, 500);
+    }).catch(() => {
+      // If play() still fails (rare), just unmute and let OBS handle it
+      vid.muted = false;
+    });
+    document.getElementById('rx-overlay').classList.add('hidden');
+  });
+
+  call.on('close', () => {
+    if (rxPingInterval) { clearInterval(rxPingInterval); rxPingInterval = null; }
+    document.getElementById('rx-overlay').classList.remove('hidden');
+    setRxLabel('Camera disconnected. Reconnecting…');
+    setTimeout(() => authAndConnect(targetId, RX_TOKEN), 3000);
+  });
+
+  call.on('error', () => {
+    setRxLabel('Stream error. Reconnecting…');
+    setTimeout(() => authAndConnect(targetId, RX_TOKEN), 3000);
+  });
+
+  // Fallback: if no stream arrives in 15s, retry
+  setTimeout(() => {
+    const vid = document.getElementById('remote-video');
+    if (!vid.srcObject) {
+      try { call.close(); } catch(e){}
+      setRxLabel('Stream timeout. Retrying…');
+      setTimeout(() => authAndConnect(targetId, RX_TOKEN), 2000);
+    }
+  }, 15000);
+}
+
+function setRxLabel(msg) {
+  document.getElementById('rx-label').textContent = msg;
+  document.getElementById('rx-label').style.display = '';
+  document.getElementById('rx-error').style.display = 'none';
+  document.getElementById('rx-spinner').style.display = '';
+}
+
+function showRxError(msg) {
+  document.getElementById('rx-spinner').style.display = 'none';
+  document.getElementById('rx-label').style.display = 'none';
+  const err = document.getElementById('rx-error');
+  err.style.display = '';
+  err.textContent = msg;
+}
+</script>
+</body>
+</html>
