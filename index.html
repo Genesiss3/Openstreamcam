@@ -30,7 +30,9 @@
     .live-badge{display:none;align-items:center;gap:5px;background:var(--live);color:#fff;font-size:11px;font-weight:800;letter-spacing:.1em;padding:4px 10px 4px 8px;border-radius:100px;}
     .live-badge.show{display:flex;}
     .live-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:#fff;animation:blink 1.1s ease-in-out infinite;}
-    @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+    .peer-status{font-size:11px;font-weight:700;letter-spacing:.08em;padding:4px 10px;border-radius:100px;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.5);}
+    .peer-status.ok{color:var(--green);border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.08);}
+    .peer-status.err{color:#f87171;border-color:rgba(248,113,113,.4);background:rgba(248,113,113,.08);animation:blink 1s ease-in-out infinite;}
 
     /* Video */
     #video-wrap{flex:1;position:relative;background:#000;overflow:hidden;}
@@ -176,6 +178,7 @@
   <div class="header">
     <div class="logo">Stream<em>Cam</em></div>
     <div class="header-right">
+      <span class="peer-status" id="peer-status">&#x25CF; Connecting</span>
       <span class="stream-timer" id="stream-timer"></span>
       <div class="live-badge" id="rec-badge">LIVE</div>
     </div>
@@ -347,7 +350,7 @@ let micEnabled=true,videoEnabled=true,facingMode='environment',torchEnabled=fals
 let currentRes={width:1920,height:1080},expirySeconds=86400,expiryInterval=null;
 let authenticatedPeers=new Set(),activeConnMap=new Map(),heartbeatInterval=null;
 let streamStartTime=null,streamTimerInt=null,emojiTrayOpen=false,settingsOpen=false;
-let rxPingInterval=null,rxDataConn=null;
+let rxPingInterval=null,rxDataConn=null,wakeLock=null;
 
 IS_RX?startReceiver(CAM_ID,RX_TOKEN):startCamera();
 
@@ -359,10 +362,13 @@ async function startCamera(){
   await initStream();
   initPeer();
   startExpiryTimer();
+  requestWakeLock();
 
   // Alt-tab fix: reattach video source to wake frozen decoder on iOS/Android
   document.addEventListener('visibilitychange',async()=>{
-    if(document.visibilityState!=='visible')return;
+    if(document.visibilityState!=='visible'){return;}
+    // Re-request wake lock — it releases automatically on hide
+    requestWakeLock();
     const vt=localStream?.getVideoTracks()[0];
     const vid=document.getElementById('local-video');
     if(!vt||vt.readyState==='ended'){
@@ -370,7 +376,11 @@ async function startCamera(){
     }else{
       try{vid.srcObject=null;await new Promise(r=>setTimeout(r,40));vid.srcObject=localStream;await vid.play();}catch(e){}
     }
-    if(peer?.disconnected){try{peer.reconnect();}catch(e){}}
+    // If peer dropped while in background, full reinit to get same-or-new ID
+    if(!peer||peer.disconnected||peer.destroyed){
+      setPeerStatus('reconnecting');
+      initPeer();
+    }
   });
 
   const onOrient=()=>setTimeout(async()=>{
@@ -380,6 +390,24 @@ async function startCamera(){
   },350);
   screen.orientation?.addEventListener('change',onOrient);
   window.addEventListener('orientationchange',onOrient);
+}
+
+async function requestWakeLock(){
+  if(!('wakeLock' in navigator))return;
+  try{
+    if(wakeLock)return; // already held
+    wakeLock=await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release',()=>{wakeLock=null;});
+  }catch(e){}
+}
+
+function setPeerStatus(state){
+  const el=document.getElementById('peer-status');
+  if(!el)return;
+  if(state==='ok'){el.textContent='● Ready';el.className='peer-status ok';}
+  else if(state==='live'){el.textContent='● Live';el.className='peer-status ok';}
+  else if(state==='reconnecting'){el.textContent='⚠ Reconnecting';el.className='peer-status err';}
+  else{el.textContent='● Connecting';el.className='peer-status';}
 }
 
 function buildIceConfig(){return{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'turn:global.relay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},{urls:'turn:global.relay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'}]};}
@@ -393,9 +421,22 @@ function initPeer(){
     const d=document.getElementById('peer-id-display');
     d.textContent=id.slice(0,8).toUpperCase();d.classList.remove('loading');
     updateObsUrl(id,token);
+    setPeerStatus('ok');
   });
-  peer.on('error',e=>{if(e.type==='network'||e.type==='server-error')setTimeout(initPeer,5000);});
-  peer.on('disconnected',()=>{try{peer.reconnect();}catch(e){}});
+  peer.on('error',e=>{
+    setPeerStatus('reconnecting');
+    if(e.type==='network'||e.type==='server-error'||e.type==='socket-error'||e.type==='socket-closed'){
+      setTimeout(initPeer,3000);
+    }
+  });
+  peer.on('disconnected',()=>{
+    setPeerStatus('reconnecting');
+    // Try fast reconnect first; fall back to full reinit after 5s
+    try{peer.reconnect();}catch(e){}
+    setTimeout(()=>{
+      if(!peer||peer.disconnected||peer.destroyed) initPeer();
+    },5000);
+  });
   peer.on('connection',conn=>{
     conn.on('data',async data=>{
       if(data?.type==='auth'){
@@ -531,6 +572,7 @@ function setMaxViewers(n){maxViewers=n;document.querySelectorAll('[id^="vc-"]').
 function updateViewerUI(){
   const c=document.getElementById('viewer-count');if(c)c.textContent=activeViewers;
   document.getElementById('rec-badge')?.classList.toggle('show',activeViewers>0);
+  setPeerStatus(activeViewers>0?'live':'ok');
   if(activeViewers>0&&!streamStartTime){streamStartTime=Date.now();document.getElementById('stream-timer')?.classList.add('show');streamTimerInt=setInterval(tickTimer,1000);}
   else if(activeViewers===0&&streamTimerInt){clearInterval(streamTimerInt);streamTimerInt=null;streamStartTime=null;const t=document.getElementById('stream-timer');if(t){t.textContent='';t.classList.remove('show');}}
 }
