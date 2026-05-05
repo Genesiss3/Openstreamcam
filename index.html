@@ -164,8 +164,14 @@
     #remote-video{width:100%;height:100%;object-fit:cover;display:block;}
     #rx-emoji-stage{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
     #rx-emoji-stage .floating-emoji{font-size:56px;bottom:4%;}
-    .rx-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(0,0,0,.88);transition:opacity .4s;}
-    .rx-overlay.hidden{opacity:0;pointer-events:none;}
+    .rx-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(0,0,0,.88);transition:background .4s,opacity .3s;}
+    /* Authed: auth passed, waiting for video — shrink to small corner pill, stop blocking screen */
+    .rx-overlay.authed{background:transparent;align-items:flex-end;justify-content:flex-end;flex-direction:row;padding:14px;gap:7px;}
+    .rx-overlay.authed .rx-spinner{width:14px;height:14px;border-width:1.5px;}
+    .rx-overlay.authed .rx-label{font-size:10px;letter-spacing:.06em;opacity:.6;}
+    .rx-overlay.authed .rx-offline{display:none;}
+    /* Hidden: fully gone once video is playing */
+    .rx-overlay.hidden{display:none;}
     .rx-spinner{width:34px;height:34px;border:2px solid rgba(255,255,255,.08);border-top-color:rgba(255,255,255,.6);border-radius:50%;animation:spin .75s linear infinite;}
     @keyframes spin{to{transform:rotate(360deg);}}
     .rx-label{font-size:12px;color:rgba(255,255,255,.35);letter-spacing:.1em;text-transform:uppercase;font-weight:500;}
@@ -283,6 +289,10 @@
           <div><div class="row-label">Channel Name</div><div class="row-sub">Shows chat in OBS overlay</div></div>
           <input class="channel-input" id="channel-input" type="text" placeholder="your_channel" autocomplete="off" autocorrect="off" autocapitalize="none" oninput="saveChannel(this.value)">
         </div>
+        <div class="sheet-row">
+          <div><div class="row-label">Chat Overlay</div><div class="row-sub">Show Twitch chat in OBS</div></div>
+          <div class="toggle on" id="chat-toggle" onclick="toggleChatOverlay()"></div>
+        </div>
       </div>
     </div>
     <div class="sheet-group">
@@ -365,6 +375,7 @@
 const params=new URLSearchParams(window.location.search);
 const CAM_ID=params.get('camera'),RX_TOKEN=params.get('token');
 const CHANNEL=params.get('channel')||'';
+const CHAT_INIT=params.get('chat')!=='0'; // default on; &chat=0 disables
 const IS_RX=!!(CAM_ID&&RX_TOKEN);
 
 let localStream=null,peer=null,peerIdReady=null,accessKey='';
@@ -374,7 +385,7 @@ let currentRes={width:1920,height:1080},expirySeconds=86400,expiryInterval=null;
 let authenticatedPeers=new Set(),activeConnMap=new Map(),heartbeatInterval=null;
 let streamStartTime=null,streamTimerInt=null,emojiTrayOpen=false,settingsOpen=false;
 let rxPingInterval=null,rxDataConn=null,wakeLock=null;
-let ircWs=null,offlineTimer=null,offlineSince=null;
+let ircWs=null,offlineTimer=null,offlineSince=null,rxPendingDc=null;
 
 IS_RX?startReceiver(CAM_ID,RX_TOKEN):startCamera();
 
@@ -387,8 +398,9 @@ async function startCamera(){
   localStorage.setItem('sc_key', accessKey);
   renderKey();
 
-  // Populate channel input from storage
-  const savedChannel = localStorage.getItem('sc_channel') || '';
+  // Restore chat toggle state
+  const chatOn = localStorage.getItem('sc_chat_on') !== 'false';
+  document.getElementById('chat-toggle')?.classList.toggle('on', chatOn);
   const chanInput = document.getElementById('channel-input');
   if (chanInput) chanInput.value = savedChannel;
 
@@ -506,6 +518,9 @@ function initPeer(reuseId=null){
     const info=activeConnMap.get(call.peer);
     if(info){info.callRef=call;info.lastPing=Date.now();}
     activeViewers++;updateViewerUI();triggerConnectionAlert();
+    // Send current chat visibility to newly connected OBS
+    const chatNow=localStorage.getItem('sc_chat_on')!=='false';
+    setTimeout(()=>{try{info?.dataConn.send({type:'chatToggle',show:chatNow});}catch(e){}},800);
     call.on('close',()=>cleanupPeer(call.peer,'closed'));
     call.on('error',()=>cleanupPeer(call.peer,'error'));
   });
@@ -648,9 +663,20 @@ function saveChannel(val){
   updateObsUrlFromState();
 }
 
+function toggleChatOverlay(){
+  const wasOn=localStorage.getItem('sc_chat_on')!=='false';
+  const nowOn=!wasOn;
+  localStorage.setItem('sc_chat_on',String(nowOn));
+  document.getElementById('chat-toggle')?.classList.toggle('on',nowOn);
+  for(const[,info]of activeConnMap.entries()){try{info.dataConn.send({type:'chatToggle',show:nowOn});}catch(e){}}
+  updateObsUrlFromState();
+  showToast(nowOn?'💬 Chat on':'💬 Chat off','purple');
+}
+
 function updateObsUrl(id,token){
   const ch=localStorage.getItem('sc_channel')||'';
-  const url=`${window.location.href.split('?')[0]}?camera=${id}&token=${token}${ch?'&channel='+encodeURIComponent(ch):''}`;
+  const chatOn=localStorage.getItem('sc_chat_on')!=='false';
+  const url=`${window.location.href.split('?')[0]}?camera=${id}&token=${token}${ch?'&channel='+encodeURIComponent(ch):''}${!chatOn?'&chat=0':''}`;
   const el=document.getElementById('obs-url-preview');if(el)el.textContent=url;
 }
 async function updateObsUrlFromState(){if(!peerIdReady)return;const t=await hashToken(accessKey);updateObsUrl(peerIdReady,t);}
@@ -671,28 +697,90 @@ let toastTimer=null;
 function showToast(msg,color=''){const t=document.getElementById('toast');if(toastTimer)clearTimeout(toastTimer);t.textContent=msg;t.className=('show '+color).trim();toastTimer=setTimeout(()=>t.classList.remove('show'),2500);}
 
 function startReceiver(targetId,token){
+  // Clean up existing peer before creating a new one
+  if(peer){try{peer.destroy();}catch(e){}}
+  rxPendingDc=null; rxDataConn=null;
+
   document.getElementById('camera-mode').style.display='none';
   document.getElementById('receiver-mode').style.display='block';
   document.title='StreamCam Feed';document.body.style.background='#000';
+
   peer=new Peer(undefined,{config:buildIceConfig()});
+
   peer.on('open',()=>{startOfflineTimer();authAndConnect(targetId,token);});
-  peer.on('error',e=>{setRxLabel('Error: '+e.type+'. Retrying…');setTimeout(()=>authAndConnect(targetId,token),5000);});
+
+  // Network/server errors need a full peer reinit, not just authAndConnect retry
+  peer.on('error',e=>{
+    setRxLabel('Connection error — retrying…');
+    if(e.type==='network'||e.type==='server-error'||e.type==='socket-error'||e.type==='socket-closed'){
+      setTimeout(()=>startReceiver(targetId,token),5000);
+    }else{
+      setTimeout(()=>authAndConnect(targetId,token),5000);
+    }
+  });
+
+  // THIS was the 5-minute bug: no disconnected handler meant the peer WebSocket
+  // dropped silently after extended outages, leaving peer.connect() going nowhere
+  peer.on('disconnected',()=>{
+    setRxLabel('Reconnecting…');
+    try{peer.reconnect();}catch(e){}
+    // If peer.reconnect() doesn't bring it back within 8s, full reinit
+    setTimeout(()=>{
+      if(peer&&(peer.disconnected||peer.destroyed)){
+        startReceiver(targetId,token);
+      }
+    },8000);
+  });
+
+  // Apply initial chat state from URL param
+  if(!CHAT_INIT){const chatEl=document.getElementById('chat-overlay');if(chatEl)chatEl.style.display='none';}
   // Connect Twitch chat if channel was included in URL
-  if(CHANNEL) connectTwitchChat(CHANNEL);
+  if(CHANNEL)connectTwitchChat(CHANNEL);
 }
 function authAndConnect(targetId,token){
   setRxLabel('Connecting…');
   if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}
+  if(rxPendingDc){try{rxPendingDc.close();}catch(e){}rxPendingDc=null;}
   if(rxDataConn){try{rxDataConn.close();}catch(e){}rxDataConn=null;}
-  let dc;try{dc=peer.connect(targetId,{reliable:true});}catch(e){setRxLabel('Failed. Retrying…');setTimeout(()=>authAndConnect(targetId,token),4000);return;}
+
+  // Guard: if the peer itself is dead, trigger a full reinit instead of a silent fail
+  if(!peer||peer.destroyed){
+    setRxLabel('Reconnecting…');
+    setTimeout(()=>startReceiver(targetId,token),2000);
+    return;
+  }
+  if(peer.disconnected){
+    setRxLabel('Reconnecting…');
+    try{peer.reconnect();}catch(e){}
+    setTimeout(()=>authAndConnect(targetId,token),3000);
+    return;
+  }
+
+  let dc;
+  try{dc=peer.connect(targetId,{reliable:true});rxPendingDc=dc;}
+  catch(e){setRxLabel('Failed. Retrying…');setTimeout(()=>authAndConnect(targetId,token),4000);return;}
+
   let authed=false;
   dc.on('open',()=>{setRxLabel('Authenticating…');dc.send({type:'auth',token});});
   dc.on('data',data=>{
-    if(data?.type==='auth-ok'){authed=true;rxDataConn=dc;setRxLabel('Opening stream…');rxPingInterval=setInterval(()=>{try{dc.send({type:'ping'});}catch(e){}},4000);requestStream(targetId);}
+    if(data?.type==='auth-ok'){
+      authed=true;rxDataConn=dc;rxPendingDc=null;
+      // Move overlay to transparent corner pill via inline style (avoids CSS specificity issues)
+      const ov=document.getElementById('rx-overlay');
+      ov.style.cssText='background:transparent;align-items:flex-end;justify-content:flex-end;flex-direction:row;padding:14px;gap:7px;';
+      document.getElementById('rx-spinner').style.cssText='width:14px;height:14px;border-width:1.5px;';
+      setRxLabel('Connecting video…');
+      rxPingInterval=setInterval(()=>{try{dc.send({type:'ping'});}catch(e){}},4000);
+      requestStream(targetId);
+    }
     else if(data?.type==='auth-fail'){showRxError(data.reason==='key'?'🔑 Invalid access key':data.reason==='locked'?'🔒 Stream is locked':data.reason==='max'?'👥 Max viewers reached':'Rejected: '+data.msg);}
     else if(data?.type==='reaction'){spawnEmoji(data.emoji,document.getElementById('rx-emoji-stage'),true);}
+    else if(data?.type==='chatToggle'){const chatEl=document.getElementById('chat-overlay');if(chatEl)chatEl.style.display=data.show?'flex':'none';}
   });
-  dc.on('close',()=>{if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}if(authed){setRxLabel('Reconnecting…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);}});
+  dc.on('close',()=>{
+    if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}
+    if(authed){setRxLabel('Reconnecting…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);}
+  });
   dc.on('error',()=>{if(!authed)setTimeout(()=>authAndConnect(targetId,token),4000);});
   setTimeout(()=>{if(!authed){try{dc.close();}catch(e){}setRxLabel('No response. Retrying…');setTimeout(()=>authAndConnect(targetId,token),4000);}},12000);
 }
@@ -705,11 +793,27 @@ function requestStream(targetId){
     const vid=document.getElementById('remote-video');
     vid.muted=true;vid.srcObject=s;
     vid.play().then(()=>setTimeout(()=>{vid.muted=false;},500)).catch(()=>{vid.muted=false;});
-    document.getElementById('rx-overlay').classList.add('hidden');
+    // Fully remove overlay via inline style — bulletproof regardless of CSS
+    const ov=document.getElementById('rx-overlay');
+    ov.style.display='none';
     stopOfflineTimer();
   });
-  call.on('close',()=>{if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}document.getElementById('rx-overlay').classList.remove('hidden');startOfflineTimer();setRxLabel('Camera offline — reconnecting');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
-  call.on('error',()=>{startOfflineTimer();setRxLabel('Camera offline — reconnecting');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
+  call.on('close',()=>{
+    if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}
+    // Restore full blocking overlay
+    const ov=document.getElementById('rx-overlay');
+    ov.removeAttribute('style');
+    document.getElementById('rx-spinner').removeAttribute('style');
+    startOfflineTimer();setRxLabel('Camera offline — reconnecting');
+    setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);
+  });
+  call.on('error',()=>{
+    const ov=document.getElementById('rx-overlay');
+    ov.removeAttribute('style');
+    document.getElementById('rx-spinner').removeAttribute('style');
+    startOfflineTimer();setRxLabel('Camera offline — reconnecting');
+    setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);
+  });
   setTimeout(()=>{if(!document.getElementById('remote-video').srcObject){try{call.close();}catch(e){}setRxLabel('Timeout. Retrying…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),2000);}},15000);
 }
 function setRxLabel(msg){document.getElementById('rx-label').textContent=msg;document.getElementById('rx-label').style.display='';document.getElementById('rx-error').style.display='none';document.getElementById('rx-spinner').style.display='';}
