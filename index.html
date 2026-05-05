@@ -376,10 +376,10 @@ async function startCamera(){
     }else{
       try{vid.srcObject=null;await new Promise(r=>setTimeout(r,40));vid.srcObject=localStream;await vid.play();}catch(e){}
     }
-    // If peer dropped while in background, full reinit to get same-or-new ID
+    // If peer dropped while in background, reinit with SAME ID so OBS URL stays valid
     if(!peer||peer.disconnected||peer.destroyed){
       setPeerStatus('reconnecting');
-      initPeer();
+      initPeer(peerIdReady);
     }
   });
 
@@ -412,9 +412,10 @@ function setPeerStatus(state){
 
 function buildIceConfig(){return{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'turn:global.relay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},{urls:'turn:global.relay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'}]};}
 
-function initPeer(){
+function initPeer(reuseId=null){
   if(peer){try{peer.destroy();}catch(e){}}
-  peer=new Peer(undefined,{config:buildIceConfig()});
+  // Pass existing ID so reconnects don't change the OBS URL
+  peer=new Peer(reuseId||undefined,{config:buildIceConfig()});
   peer.on('open',async id=>{
     peerIdReady=id;
     const token=await hashToken(accessKey);
@@ -425,17 +426,21 @@ function initPeer(){
   });
   peer.on('error',e=>{
     setPeerStatus('reconnecting');
-    if(e.type==='network'||e.type==='server-error'||e.type==='socket-error'||e.type==='socket-closed'){
-      setTimeout(initPeer,3000);
+    if(e.type==='unavailable-id'){
+      // ID still registered on server — wait 3s for it to expire then retry with same ID
+      setTimeout(()=>initPeer(reuseId||peerIdReady),3000);
+    } else if(e.type==='network'||e.type==='server-error'||e.type==='socket-error'||e.type==='socket-closed'){
+      setTimeout(()=>initPeer(peerIdReady),3000);
     }
   });
   peer.on('disconnected',()=>{
     setPeerStatus('reconnecting');
-    // Try fast reconnect first; fall back to full reinit after 5s
+    // Fast path: reconnect keeps same ID
     try{peer.reconnect();}catch(e){}
+    // Slow path: if still disconnected after 6s, full reinit with same ID
     setTimeout(()=>{
-      if(!peer||peer.disconnected||peer.destroyed) initPeer();
-    },5000);
+      if(!peer||peer.disconnected||peer.destroyed) initPeer(peerIdReady);
+    },6000);
   });
   peer.on('connection',conn=>{
     conn.on('data',async data=>{
@@ -587,12 +592,14 @@ function tickTimer(){
 
 function startExpiryTimer(){if(expiryInterval)clearInterval(expiryInterval);expirySeconds=86400;expiryInterval=setInterval(()=>{if(--expirySeconds<=0)rotatePeerId();},1000);}
 async function rotatePeerId(){
-  peerIdReady=null;
   const d=document.getElementById('peer-id-display');if(d){d.textContent='Rotating…';d.classList.add('loading');}
   if(heartbeatInterval){clearInterval(heartbeatInterval);heartbeatInterval=null;}
   if(peer){try{peer.destroy();}catch(e){}}
   authenticatedPeers.clear();activeConnMap.clear();activeViewers=0;updateViewerUI();
-  initPeer();startExpiryTimer();showToast('🔄 ID rotated — update OBS','yellow');
+  peerIdReady=null; // clear so initPeer(null) gets a brand-new ID
+  initPeer(null);
+  startExpiryTimer();
+  showToast('🔄 ID rotated — update OBS','yellow');
 }
 
 function updateObsUrl(id,token){const url=`${window.location.href.split('?')[0]}?camera=${id}&token=${token}`;const el=document.getElementById('obs-url-preview');if(el)el.textContent=url;}
