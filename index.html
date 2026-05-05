@@ -3,590 +3,252 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>PhoneCam</title>
+  <title>StreamCam</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg:        #09090b;
-      --surface:   #18181b;
-      --surface2:  #27272a;
-      --border:    rgba(255,255,255,0.07);
-      --border2:   rgba(255,255,255,0.13);
-      --text:      #fafafa;
-      --muted:     #71717a;
-      --accent:    #a855f7;
-      --accent-bg: rgba(168,85,247,0.18);
-      --live:      #ef4444;
-      --green:     #22c55e;
-      --yellow:    #facc15;
-      --font:      'Plus Jakarta Sans', sans-serif;
+      --bg:#09090b; --surface:#18181b; --surface2:#27272a;
+      --border:rgba(255,255,255,.07); --border2:rgba(255,255,255,.13);
+      --text:#fafafa; --muted:#71717a; --accent:#a855f7;
+      --accent-bg:rgba(168,85,247,.18); --live:#ef4444;
+      --green:#22c55e; --yellow:#facc15;
+      --font:'Plus Jakarta Sans',sans-serif;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:var(--font);background:#000;color:var(--text);height:100dvh;overflow:hidden;-webkit-tap-highlight-color:transparent;user-select:none;}
+
+    #camera-mode{position:relative;height:100dvh;display:flex;flex-direction:column;}
+
+    /* Header */
+    .header{position:absolute;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:linear-gradient(to bottom,rgba(9,9,11,.78),transparent);}
+    .logo{font-size:18px;font-weight:800;letter-spacing:-.5px;}
+    .logo em{font-style:normal;color:var(--accent);}
+    .header-right{display:flex;align-items:center;gap:8px;}
+    .stream-timer{display:none;font-size:12px;font-weight:600;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums;}
+    .stream-timer.show{display:block;}
+    .live-badge{display:none;align-items:center;gap:5px;background:var(--live);color:#fff;font-size:11px;font-weight:800;letter-spacing:.1em;padding:4px 10px 4px 8px;border-radius:100px;}
+    .live-badge.show{display:flex;}
+    .live-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:#fff;animation:blink 1.1s ease-in-out infinite;}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+    /* Video */
+    #video-wrap{flex:1;position:relative;background:#000;overflow:hidden;}
+    #local-video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1);}
+    #local-video.rear{transform:scaleX(1);}
+    .video-fade{position:absolute;bottom:0;left:0;right:0;height:200px;background:linear-gradient(to top,rgba(9,9,11,.9),transparent);pointer-events:none;}
+    .emoji-stage{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
+    .floating-emoji{position:absolute;bottom:15%;pointer-events:none;font-size:36px;line-height:1;animation:rise var(--dur,3s) ease-out forwards;}
+    @keyframes rise{
+      0%{transform:translateY(0) scale(.4) rotate(var(--r0,0deg));opacity:0;}
+      12%{transform:translateY(-25px) scale(1.2) rotate(var(--r1,0deg));opacity:1;}
+      85%{opacity:1;}
+      100%{transform:translateY(var(--travel,-280px)) translateX(var(--drift,0px)) scale(.8) rotate(var(--r2,0deg));opacity:0;}
     }
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text);
-      height: 100dvh;
-      overflow: hidden;
-      -webkit-tap-highlight-color: transparent;
-      user-select: none;
+    /* ── SINGLE BOTTOM BAR with two inner states ── */
+    #bottom-bar{
+      position:absolute;bottom:0;left:0;right:0;
+      padding:12px 16px max(20px,env(safe-area-inset-bottom));
+      z-index:25;
     }
 
-    /* ═══════════════════════════════════════
-       CAMERA MODE
-    ════════════════════════════════════════ */
-    #camera-mode {
-      position: relative;
-      height: 100dvh;
-      display: flex;
-      flex-direction: column;
+    /* Normal controls row — visible by default */
+    #ctrl-row{display:flex;align-items:center;justify-content:space-around;}
+
+    /* Emoji row — hidden until toggled, replaces ctrl-row in same space */
+    #emoji-row{
+      display:none;
+      align-items:center;
+      gap:10px;
+      width:100%;
     }
 
-    /* ── Header ─────────────────────────── */
-    .header {
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      z-index: 30;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 14px 16px;
-      background: linear-gradient(to bottom, rgba(9,9,11,0.75) 0%, transparent 100%);
+    .emoji-close{
+      width:48px;height:48px;flex-shrink:0;
+      border-radius:50%;border:none;
+      background:rgba(255,255,255,.12);
+      backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+      color:var(--text);font-size:18px;font-weight:700;
+      display:flex;align-items:center;justify-content:center;
+      cursor:pointer;
+    }
+    .emoji-close:active{opacity:.6;}
+
+    /* min-width:0 is CRITICAL — forces flex child to allow overflow-x scroll */
+    .emoji-scroll{
+      flex:1;min-width:0;
+      display:flex;gap:8px;
+      overflow-x:auto;overflow-y:hidden;
+      -webkit-overflow-scrolling:touch;
+      touch-action:pan-x;
+      scrollbar-width:none;
+      padding:4px 0;
+    }
+    .emoji-scroll::-webkit-scrollbar{display:none;}
+
+    .emoji-btn{
+      width:48px;height:48px;flex-shrink:0;
+      border-radius:50%;border:none;
+      background:rgba(255,255,255,.1);
+      backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+      font-size:24px;
+      display:flex;align-items:center;justify-content:center;
+      cursor:pointer;
+    }
+    .emoji-btn:active{opacity:.55;}
+
+    /* Control buttons */
+    .ctrl-btn{width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.1);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .14s;color:var(--text);}
+    .ctrl-btn:active{transform:scale(.86);}
+    .ctrl-btn.active{background:var(--accent-bg);border-color:rgba(168,85,247,.5);color:var(--accent);}
+    .ctrl-btn.off{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.4);color:#fca5a5;}
+    .ctrl-btn svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+
+    /* Settings sheet */
+    .sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:40;opacity:0;pointer-events:none;transition:opacity .3s;}
+    .sheet-backdrop.open{opacity:1;pointer-events:all;}
+    .settings-sheet{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-radius:22px 22px 0 0;border-top:1px solid var(--border2);z-index:50;transform:translateY(100%);transition:transform .36s cubic-bezier(.32,.72,0,1);padding-bottom:max(32px,env(safe-area-inset-bottom));max-height:88dvh;overflow-y:auto;}
+    .settings-sheet.open{transform:translateY(0);}
+    .sheet-handle{width:38px;height:4px;background:var(--border2);border-radius:2px;margin:14px auto 18px;}
+    .sheet-group{padding:0 14px;margin-bottom:10px;}
+    .sheet-group-label{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;padding:0 4px 8px;}
+    .sheet-card{background:var(--surface2);border-radius:16px;border:1px solid var(--border);overflow:hidden;}
+    .sheet-row{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);gap:12px;}
+    .sheet-row:last-child{border-bottom:none;}
+    .row-label{font-size:15px;font-weight:500;}
+    .row-sub{font-size:12px;color:var(--muted);margin-top:2px;}
+    .toggle{width:46px;height:26px;border-radius:13px;background:var(--surface);border:1.5px solid var(--border2);position:relative;cursor:pointer;transition:background .22s,border-color .22s;flex-shrink:0;}
+    .toggle::after{content:'';position:absolute;width:20px;height:20px;border-radius:50%;background:var(--muted);top:1px;left:1px;transition:all .22s cubic-bezier(.34,1.56,.64,1);}
+    .toggle.on{background:var(--accent);border-color:var(--accent);}
+    .toggle.on::after{transform:translateX(20px);background:#fff;}
+    .seg{display:flex;background:rgba(0,0,0,.3);border-radius:10px;padding:3px;gap:2px;}
+    .seg-opt{flex:1;padding:7px 8px;text-align:center;font-size:13px;font-weight:600;color:var(--muted);border-radius:8px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+    .seg-opt.active{background:var(--surface);color:var(--text);box-shadow:0 1px 4px rgba(0,0,0,.35);}
+    .id-area{padding:16px 16px 4px;}
+    .id-label{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;}
+    .id-value{font-size:26px;font-weight:800;color:var(--accent);letter-spacing:.18em;text-align:center;font-variant-numeric:tabular-nums;}
+    .id-value.loading{font-size:13px;color:var(--muted);letter-spacing:.04em;font-weight:500;}
+    .btn-primary{width:100%;padding:15px;border-radius:12px;border:none;background:var(--accent);color:#fff;font-family:var(--font);font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .14s;}
+    .btn-primary:active{opacity:.78;}
+    .btn-primary svg{width:18px;height:18px;stroke:#fff;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;}
+    .btn-secondary{flex:1;padding:13px;border-radius:12px;border:1px solid var(--border2);background:transparent;color:var(--text);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:background .14s;}
+    .btn-secondary:active{background:var(--surface2);}
+    .btn-secondary svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+    .key-row{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.3);border-radius:10px;padding:10px 12px;}
+    .key-val{flex:1;font-size:16px;font-weight:700;color:var(--green);letter-spacing:.14em;font-variant-numeric:tabular-nums;}
+    .icon-btn{background:none;border:none;padding:4px;color:var(--muted);cursor:pointer;border-radius:6px;}
+    .icon-btn svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:block;}
+    .icon-btn:active{color:var(--text);}
+
+    @media(orientation:landscape)and(max-height:480px){
+      .header{padding:8px 16px;}#bottom-bar{padding:8px 24px 8px;}
+      .ctrl-btn{width:44px;height:44px;}
     }
 
-    .logo {
-      font-size: 18px;
-      font-weight: 800;
-      letter-spacing: -0.6px;
-      color: var(--text);
-    }
-    .logo em { font-style: normal; color: var(--accent); }
+    /* Receiver */
+    #receiver-mode{display:none;position:fixed;inset:0;background:#000;}
+    #remote-video{width:100%;height:100%;object-fit:cover;display:block;}
+    #rx-emoji-stage{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
+    #rx-emoji-stage .floating-emoji{font-size:56px;bottom:4%;}
+    .rx-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(0,0,0,.88);transition:opacity .4s;}
+    .rx-overlay.hidden{opacity:0;pointer-events:none;}
+    .rx-spinner{width:34px;height:34px;border:2px solid rgba(255,255,255,.08);border-top-color:rgba(255,255,255,.6);border-radius:50%;animation:spin .75s linear infinite;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    .rx-label{font-size:12px;color:rgba(255,255,255,.35);letter-spacing:.1em;text-transform:uppercase;font-weight:500;}
+    .rx-error{font-size:14px;color:#fca5a5;text-align:center;padding:0 40px;line-height:1.65;}
 
-    .header-right { display: flex; align-items: center; gap: 8px; }
+    #toast{position:fixed;bottom:36px;left:50%;transform:translateX(-50%) translateY(80px);background:#fff;color:#09090b;font-size:14px;font-weight:700;padding:11px 22px;border-radius:100px;z-index:9999;white-space:nowrap;box-shadow:0 4px 28px rgba(0,0,0,.45);transition:transform .3s cubic-bezier(.34,1.56,.64,1);}
+    #toast.show{transform:translateX(-50%) translateY(0);}
+    #toast.red{background:#ef4444;color:#fff;}
+    #toast.yellow{background:#facc15;color:#09090b;}
+    #toast.purple{background:var(--accent);color:#fff;}
 
-    .stream-timer {
-      font-size: 12px;
-      font-weight: 600;
-      color: rgba(255,255,255,0.65);
-      font-variant-numeric: tabular-nums;
-      display: none;
-      letter-spacing: 0.02em;
-    }
-    .stream-timer.show { display: block; }
-
-    .live-badge {
-      display: none;
-      align-items: center;
-      gap: 5px;
-      background: var(--live);
-      color: white;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 0.1em;
-      padding: 4px 10px 4px 8px;
-      border-radius: 100px;
-    }
-    .live-badge.show { display: flex; }
-    .live-badge::before {
-      content: '';
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: white;
-      animation: blink 1.1s ease-in-out infinite;
-    }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
-
-    .viewer-chip {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border: 1px solid var(--border2);
-      color: var(--text);
-      font-size: 13px;
-      font-weight: 600;
-      padding: 4px 11px 4px 9px;
-      border-radius: 100px;
-    }
-    .viewer-chip svg { opacity: 0.7; }
-
-    /* ── Video ──────────────────────────── */
-    #video-wrap {
-      flex: 1;
-      position: relative;
-      background: #000;
-      overflow: hidden;
-    }
-
-    #local-video {
-      width: 100%; height: 100%;
-      object-fit: cover;
-      display: block;
-      transform: scaleX(-1);
-    }
-    #local-video.rear { transform: scaleX(1); }
-
-    /* Bottom gradient so controls are legible */
-    .video-fade {
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      height: 200px;
-      background: linear-gradient(to top, rgba(9,9,11,0.9) 0%, transparent 100%);
-      pointer-events: none;
-    }
-
-    /* ── Emoji stage (phone side) ───────── */
-    .emoji-stage {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      overflow: hidden;
-    }
-
-    .floating-emoji {
-      position: absolute;
-      bottom: 12%;
-      pointer-events: none;
-      font-size: 36px;
-      line-height: 1;
-      animation: rise var(--dur, 3s) ease-out forwards;
-      will-change: transform, opacity;
-    }
-
-    @keyframes rise {
-      0%   { transform: translateY(0) scale(0.4) rotate(var(--r0,0deg)); opacity: 0; }
-      12%  { transform: translateY(-25px) scale(1.2) rotate(var(--r1,0deg)); opacity: 1; }
-      85%  { opacity: 1; }
-      100% { transform: translateY(var(--travel,-280px)) translateX(var(--drift,0px)) scale(0.8) rotate(var(--r2,0deg)); opacity: 0; }
-    }
-
-    /* ── Emoji tray ─────────────────────── */
-    .emoji-tray {
-      position: absolute;
-      bottom: 88px;
-      left: 50%;
-      transform: translateX(-50%) translateY(140%);
-      transition: transform 0.32s cubic-bezier(0.34,1.56,0.64,1);
-      z-index: 25;
-      display: flex;
-      gap: 8px;
-      padding: 12px 16px;
-      background: rgba(24,24,27,0.85);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid var(--border2);
-      border-radius: 100px;
-    }
-    .emoji-tray.open { transform: translateX(-50%) translateY(0); }
-
-    .emoji-btn {
-      width: 46px; height: 46px;
-      border-radius: 50%;
-      border: none;
-      background: rgba(255,255,255,0.08);
-      font-size: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: transform 0.12s;
-    }
-    .emoji-btn:active { transform: scale(0.78); }
-
-    /* ── Controls bar ───────────────────── */
-    .controls {
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      padding: 14px 20px max(20px, env(safe-area-inset-bottom));
-      display: flex;
-      align-items: center;
-      justify-content: space-around;
-      z-index: 25;
-    }
-
-    .ctrl-btn {
-      width: 50px; height: 50px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(255,255,255,0.1);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.14s;
-      color: var(--text);
-      position: relative;
-    }
-    .ctrl-btn:active { transform: scale(0.86); }
-    .ctrl-btn.active {
-      background: var(--accent-bg);
-      border-color: rgba(168,85,247,0.5);
-      color: var(--accent);
-    }
-    .ctrl-btn.off {
-      background: rgba(239,68,68,0.15);
-      border-color: rgba(239,68,68,0.4);
-      color: #fca5a5;
-    }
-    .ctrl-btn svg {
-      width: 21px; height: 21px;
-      stroke: currentColor; fill: none;
-      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
-    }
-
-    /* ── Settings sheet ─────────────────── */
-    .sheet-backdrop {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.6);
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-      z-index: 40;
-      opacity: 0; pointer-events: none;
-      transition: opacity 0.3s;
-    }
-    .sheet-backdrop.open { opacity: 1; pointer-events: all; }
-
-    .settings-sheet {
-      position: fixed;
-      bottom: 0; left: 0; right: 0;
-      background: var(--surface);
-      border-radius: 22px 22px 0 0;
-      border-top: 1px solid var(--border2);
-      z-index: 50;
-      transform: translateY(100%);
-      transition: transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
-      padding-bottom: max(32px, env(safe-area-inset-bottom));
-      max-height: 88dvh;
-      overflow-y: auto;
-    }
-    .settings-sheet.open { transform: translateY(0); }
-
-    .sheet-handle {
-      width: 38px; height: 4px;
-      background: var(--border2);
-      border-radius: 2px;
-      margin: 14px auto 18px;
-      flex-shrink: 0;
-    }
-
-    .sheet-group {
-      padding: 0 14px;
-      margin-bottom: 10px;
-    }
-
-    .sheet-group-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      padding: 0 4px 8px;
-    }
-
-    .sheet-card {
-      background: var(--surface2);
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      overflow: hidden;
-    }
-
-    .sheet-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
-      gap: 12px;
-    }
-    .sheet-row:last-child { border-bottom: none; }
-
-    .row-label { font-size: 15px; font-weight: 500; }
-    .row-sub   { font-size: 12px; color: var(--muted); margin-top: 2px; }
-
-    /* Toggle */
-    .toggle {
-      width: 46px; height: 26px;
-      border-radius: 13px;
-      background: var(--surface);
-      border: 1.5px solid var(--border2);
-      position: relative;
-      cursor: pointer;
-      transition: background 0.22s, border-color 0.22s;
-      flex-shrink: 0;
-    }
-    .toggle::after {
-      content: '';
-      position: absolute;
-      width: 20px; height: 20px;
-      border-radius: 50%;
-      background: var(--muted);
-      top: 1px; left: 1px;
-      transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
-    }
-    .toggle.on { background: var(--accent); border-color: var(--accent); }
-    .toggle.on::after { transform: translateX(20px); background: white; }
-
-    /* Segmented */
-    .seg {
-      display: flex;
-      background: rgba(0,0,0,0.3);
-      border-radius: 10px;
-      padding: 3px;
-      gap: 2px;
-    }
-    .seg-opt {
-      flex: 1;
-      padding: 7px 8px;
-      text-align: center;
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--muted);
-      border-radius: 8px;
-      cursor: pointer;
-      transition: all 0.15s;
-      white-space: nowrap;
-    }
-    .seg-opt.active {
-      background: var(--surface);
-      color: var(--text);
-      box-shadow: 0 1px 4px rgba(0,0,0,0.35);
-    }
-
-    /* Camera ID section */
-    .id-area { padding: 16px 16px 4px; }
-    .id-label {
-      font-size: 11px; font-weight: 600;
-      color: var(--muted); letter-spacing: 0.1em;
-      text-transform: uppercase; margin-bottom: 8px;
-    }
-    .id-value {
-      font-size: 26px; font-weight: 800;
-      color: var(--accent); letter-spacing: 0.18em;
-      text-align: center;
-      font-variant-numeric: tabular-nums;
-    }
-    .id-value.loading { font-size: 13px; color: var(--muted); letter-spacing: 0.04em; font-weight: 500; }
-
-    /* Buttons */
-    .btn-primary {
-      width: 100%; padding: 15px;
-      border-radius: 12px; border: none;
-      background: var(--accent);
-      color: white; font-family: var(--font);
-      font-size: 16px; font-weight: 700;
-      cursor: pointer; display: flex;
-      align-items: center; justify-content: center;
-      gap: 8px; letter-spacing: -0.2px;
-      transition: opacity 0.14s;
-    }
-    .btn-primary:active { opacity: 0.78; }
-    .btn-primary svg { width: 18px; height: 18px; stroke: white; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-
-    .btn-secondary {
-      flex: 1; padding: 13px;
-      border-radius: 12px;
-      border: 1px solid var(--border2);
-      background: transparent;
-      color: var(--text); font-family: var(--font);
-      font-size: 14px; font-weight: 600;
-      cursor: pointer; display: flex;
-      align-items: center; justify-content: center;
-      gap: 7px; letter-spacing: -0.1px;
-      transition: background 0.14s;
-    }
-    .btn-secondary:active { background: var(--surface2); }
-    .btn-secondary svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-
-    /* Access key */
-    .key-row {
-      display: flex; align-items: center; gap: 8px;
-      background: rgba(0,0,0,0.3); border-radius: 10px;
-      padding: 10px 12px;
-    }
-    .key-val {
-      flex: 1; font-size: 16px; font-weight: 700;
-      color: var(--green); letter-spacing: 0.14em;
-      font-variant-numeric: tabular-nums;
-    }
-    .icon-btn {
-      background: none; border: none; padding: 4px;
-      color: var(--muted); cursor: pointer; border-radius: 6px;
-    }
-    .icon-btn svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: block; }
-    .icon-btn:active { color: var(--text); }
-
-    /* Landscape */
-    @media (orientation: landscape) and (max-height: 480px) {
-      .header { padding: 8px 16px; }
-      .controls { padding: 8px 24px 8px; }
-      .ctrl-btn { width: 44px; height: 44px; }
-      .emoji-tray { bottom: 70px; }
-    }
-
-    /* ═══════════════════════════════════════
-       RECEIVER MODE (OBS Browser Source)
-    ════════════════════════════════════════ */
-    #receiver-mode {
-      display: none;
-      position: fixed; inset: 0;
-      background: #000;
-    }
-
-    #remote-video {
-      width: 100%; height: 100%;
-      object-fit: cover; display: block;
-    }
-
-    /* Emoji stage in OBS — bigger, starts lower */
-    #rx-emoji-stage {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      overflow: hidden;
-    }
-    #rx-emoji-stage .floating-emoji {
-      font-size: 56px;
-      bottom: 4%;
-    }
-
-    .rx-overlay {
-      position: absolute; inset: 0;
-      display: flex; align-items: center;
-      justify-content: center; flex-direction: column;
-      gap: 14px;
-      background: rgba(0,0,0,0.88);
-      transition: opacity 0.4s;
-    }
-    .rx-overlay.hidden { opacity: 0; pointer-events: none; }
-
-    .rx-spinner {
-      width: 34px; height: 34px;
-      border: 2px solid rgba(255,255,255,0.08);
-      border-top-color: rgba(255,255,255,0.6);
-      border-radius: 50%;
-      animation: spin 0.75s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .rx-label { font-size: 12px; color: rgba(255,255,255,0.35); letter-spacing: 0.1em; text-transform: uppercase; font-weight: 500; }
-    .rx-error { font-size: 14px; color: #fca5a5; text-align: center; padding: 0 40px; line-height: 1.65; }
-
-    /* ═══ Toast ═══ */
-    #toast {
-      position: fixed; bottom: 36px; left: 50%;
-      transform: translateX(-50%) translateY(80px);
-      background: white; color: #09090b;
-      font-size: 14px; font-weight: 700;
-      padding: 11px 22px; border-radius: 100px;
-      z-index: 9999; white-space: nowrap;
-      box-shadow: 0 4px 28px rgba(0,0,0,0.45);
-      transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
-    }
-    #toast.show { transform: translateX(-50%) translateY(0); }
-    #toast.red    { background: #ef4444; color: white; }
-    #toast.yellow { background: #facc15; color: #09090b; }
-    #toast.purple { background: var(--accent); color: white; }
-
-    /* ═══ Alert ═══ */
-    #alert-overlay {
-      position: fixed; top: 64px; left: 0; right: 0;
-      z-index: 200; display: flex; justify-content: center;
-      pointer-events: none;
-    }
-    .alert-banner {
-      background: white; color: #09090b;
-      font-size: 13px; font-weight: 700;
-      padding: 10px 22px; border-radius: 100px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
-      transform: translateY(-70px) scale(0.88);
-      opacity: 0;
-      transition: all 0.35s cubic-bezier(0.34,1.56,0.64,1);
-    }
-    .alert-banner.show { transform: translateY(0) scale(1); opacity: 1; }
+    #alert-overlay{position:fixed;top:64px;left:0;right:0;z-index:200;display:flex;justify-content:center;pointer-events:none;}
+    .alert-banner{background:#fff;color:#09090b;font-size:13px;font-weight:700;padding:10px 22px;border-radius:100px;box-shadow:0 4px 24px rgba(0,0,0,.4);transform:translateY(-70px) scale(.88);opacity:0;transition:all .35s cubic-bezier(.34,1.56,.64,1);}
+    .alert-banner.show{transform:translateY(0) scale(1);opacity:1;}
   </style>
 </head>
 <body>
 
-<!-- ════════════════════════════════════
-     CAMERA MODE
-═════════════════════════════════════ -->
 <div id="camera-mode">
 
-  <!-- Header overlay -->
   <div class="header">
-    <div class="logo">Phone<em>Cam</em></div>
+    <div class="logo">Stream<em>Cam</em></div>
     <div class="header-right">
       <span class="stream-timer" id="stream-timer"></span>
       <div class="live-badge" id="rec-badge">LIVE</div>
-      <div class="viewer-chip">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span id="viewer-count">0</span>
-      </div>
     </div>
   </div>
 
-  <!-- Video fill -->
   <div id="video-wrap">
     <video id="local-video" autoplay muted playsinline></video>
     <div class="emoji-stage" id="emoji-stage-cam"></div>
     <div class="video-fade"></div>
   </div>
 
-  <!-- Emoji tray (slides up above controls) -->
-  <div class="emoji-tray" id="emoji-tray">
-    <button class="emoji-btn" onclick="sendReaction('🔥')">🔥</button>
-    <button class="emoji-btn" onclick="sendReaction('❤️')">❤️</button>
-    <button class="emoji-btn" onclick="sendReaction('😂')">😂</button>
-    <button class="emoji-btn" onclick="sendReaction('👏')">👏</button>
-    <button class="emoji-btn" onclick="sendReaction('🤩')">🤩</button>
-    <button class="emoji-btn" onclick="sendReaction('💯')">💯</button>
-    <button class="emoji-btn" onclick="sendReaction('🎉')">🎉</button>
-    <button class="emoji-btn" onclick="sendReaction('💀')">💀</button>
+  <!-- Single bottom bar: ctrl-row and emoji-row swap inside it -->
+  <div id="bottom-bar">
+
+    <!-- Normal controls (shown by default) -->
+    <div id="ctrl-row">
+      <button class="ctrl-btn" id="btn-flip" onclick="flipCamera()">
+        <svg viewBox="0 0 24 24"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+      </button>
+      <button class="ctrl-btn active" id="btn-mic" onclick="toggleMic()">
+        <svg id="mic-icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+      </button>
+      <button class="ctrl-btn active" id="btn-video" onclick="toggleVideo()">
+        <svg viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+      </button>
+      <button class="ctrl-btn" id="btn-torch" style="display:none" onclick="toggleTorch()">
+        <svg viewBox="0 0 24 24"><path d="M9.663 17h4.673M12 3v1M6.343 6.343l-.707-.707M3 12H2M21 12h-1M18.364 6.343l.707-.707M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>
+      </button>
+      <button class="ctrl-btn" id="btn-emoji" onclick="toggleEmojiTray()">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9" stroke-width="3"/><line x1="15" y1="9" x2="15.01" y2="9" stroke-width="3"/></svg>
+      </button>
+      <button class="ctrl-btn" id="btn-settings" onclick="toggleSettings()">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+
+    <!-- Emoji row (hidden until btn-emoji tapped, swipes to scroll) -->
+    <div id="emoji-row">
+      <button class="emoji-close" onclick="toggleEmojiTray()">&#x2715;</button>
+      <div class="emoji-scroll">
+        <button class="emoji-btn" onclick="sendReaction('🔥')">🔥</button>
+        <button class="emoji-btn" onclick="sendReaction('❤️')">❤️</button>
+        <button class="emoji-btn" onclick="sendReaction('😂')">😂</button>
+        <button class="emoji-btn" onclick="sendReaction('👏')">👏</button>
+        <button class="emoji-btn" onclick="sendReaction('🤩')">🤩</button>
+        <button class="emoji-btn" onclick="sendReaction('💯')">💯</button>
+        <button class="emoji-btn" onclick="sendReaction('🎉')">🎉</button>
+        <button class="emoji-btn" onclick="sendReaction('💀')">💀</button>
+        <button class="emoji-btn" onclick="sendReaction('😈')">😈</button>
+        <button class="emoji-btn" onclick="sendReaction('⚡')">⚡</button>
+        <button class="emoji-btn" onclick="sendReaction('💎')">💎</button>
+        <button class="emoji-btn" onclick="sendReaction('🫡')">🫡</button>
+        <button class="emoji-btn" onclick="sendReaction('🙏')">🙏</button>
+        <button class="emoji-btn" onclick="sendReaction('😭')">😭</button>
+        <button class="emoji-btn" onclick="sendReaction('💪')">💪</button>
+        <button class="emoji-btn" onclick="sendReaction('👀')">👀</button>
+        <button class="emoji-btn" onclick="sendReaction('🥳')">🥳</button>
+        <button class="emoji-btn" onclick="sendReaction('🤣')">🤣</button>
+      </div>
+    </div>
+
   </div>
 
-  <!-- Controls bar -->
-  <div class="controls">
-    <button class="ctrl-btn" id="btn-flip" onclick="flipCamera()">
-      <svg viewBox="0 0 24 24"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
-    </button>
-    <button class="ctrl-btn active" id="btn-mic" onclick="toggleMic()">
-      <svg id="mic-icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
-    </button>
-    <button class="ctrl-btn active" id="btn-video" onclick="toggleVideo()">
-      <svg viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-    </button>
-    <button class="ctrl-btn" id="btn-torch" style="display:none" onclick="toggleTorch()">
-      <svg viewBox="0 0 24 24"><path d="M9.663 17h4.673M12 3v1M6.343 6.343l-.707-.707M3 12H2M21 12h-1M18.364 6.343l.707-.707M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>
-    </button>
-    <button class="ctrl-btn" id="btn-emoji" onclick="toggleEmojiTray()">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9" stroke-width="3"/><line x1="15" y1="9" x2="15.01" y2="9" stroke-width="3"/></svg>
-    </button>
-    <button class="ctrl-btn" id="btn-settings" onclick="toggleSettings()">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-    </button>
-  </div>
-
-  <!-- Settings backdrop -->
   <div class="sheet-backdrop" id="sheet-backdrop" onclick="toggleSettings()"></div>
 
-  <!-- Settings sheet -->
   <div class="settings-sheet" id="settings-sheet">
     <div class="sheet-handle"></div>
-
-    <!-- Camera ID + OBS URL -->
     <div class="sheet-group">
       <div class="sheet-group-label">OBS Connection</div>
       <div class="sheet-card">
         <div class="id-area">
           <div class="id-label">Camera ID</div>
-          <div class="id-value loading" id="peer-id-display">Connecting…</div>
+          <div class="id-value loading" id="peer-id-display">Connecting&#x2026;</div>
         </div>
         <div style="padding:12px 16px 16px;display:flex;flex-direction:column;gap:8px">
           <button class="btn-primary" onclick="copyObsUrl()">
@@ -600,16 +262,11 @@
         </div>
       </div>
     </div>
-
-    <!-- Viewers + Lock -->
     <div class="sheet-group">
       <div class="sheet-group-label">Stream Controls</div>
       <div class="sheet-card">
         <div class="sheet-row">
-          <div>
-            <div class="row-label">Max Viewers</div>
-            <div class="row-sub">Active OBS connections</div>
-          </div>
+          <div><div class="row-label">Max Viewers</div><div class="row-sub">Active OBS connections</div></div>
           <div class="seg">
             <div class="seg-opt active" id="vc-1" onclick="setMaxViewers(1)">1</div>
             <div class="seg-opt" id="vc-2" onclick="setMaxViewers(2)">2</div>
@@ -618,17 +275,11 @@
           </div>
         </div>
         <div class="sheet-row">
-          <div>
-            <div class="row-label">Lock Stream</div>
-            <div class="row-sub">Block all new connections</div>
-          </div>
+          <div><div class="row-label">Lock Stream</div><div class="row-sub">Block new connections</div></div>
           <div class="toggle" id="lock-toggle" onclick="toggleStreamLock()"></div>
         </div>
         <div class="sheet-row">
-          <div>
-            <div class="row-label">Resolution</div>
-            <div class="row-sub">Camera output quality</div>
-          </div>
+          <div><div class="row-label">Resolution</div><div class="row-sub">Output quality</div></div>
           <div class="seg">
             <div class="seg-opt res-chip" onclick="setRes(640,360,'360p',this)">360p</div>
             <div class="seg-opt res-chip" onclick="setRes(1280,720,'720p',this)">720p</div>
@@ -637,678 +288,324 @@
         </div>
       </div>
     </div>
-
-    <!-- Access key -->
     <div class="sheet-group">
       <div class="sheet-group-label">Access Key</div>
       <div class="sheet-card">
         <div style="padding:14px 16px">
           <div class="key-row" style="margin-bottom:10px">
-            <div class="key-val" id="key-display">••••••••••••</div>
-            <button class="icon-btn" onclick="toggleKeyVisibility()">
-              <svg id="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-            <button class="icon-btn" onclick="copyKey()">
-              <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            </button>
+            <div class="key-val" id="key-display">&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;</div>
+            <button class="icon-btn" onclick="toggleKeyVisibility()"><svg id="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button class="icon-btn" onclick="copyKey()"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
           </div>
           <div style="display:flex;gap:8px">
-            <button class="btn-secondary" onclick="regenerateKey()">
-              <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-              New Key
-            </button>
-            <button class="btn-secondary" onclick="rotatePeerId()">
-              <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-              Rotate ID
-            </button>
+            <button class="btn-secondary" onclick="regenerateKey()"><svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>New Key</button>
+            <button class="btn-secondary" onclick="rotatePeerId()"><svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Rotate ID</button>
           </div>
         </div>
       </div>
     </div>
-
-    <div style="padding:4px 18px 8px;text-align:center">
-      <p style="font-size:12px;color:var(--muted);line-height:1.7">
-        Tap <strong style="color:var(--text)">Copy OBS URL</strong> on your phone, then add it as a<br>
-        <strong style="color:var(--text)">Browser Source</strong> in OBS at your resolution size.
-      </p>
+    <div style="padding:4px 18px 12px;text-align:center">
+      <p style="font-size:12px;color:var(--muted);line-height:1.7">Tap <strong style="color:var(--text)">Copy OBS URL</strong> then add as a <strong style="color:var(--text)">Browser Source</strong> in OBS at your chosen resolution.</p>
     </div>
   </div>
 
-  <!-- JS-required hidden elements -->
+  <!-- Hidden elements required by JS -->
   <div style="display:none" aria-hidden="true">
+    <span id="viewer-count">0</span>
     <div id="obs-url-preview"></div>
-    <div id="viewer-dots"></div>
-    <div id="max-viewer-label">1</div>
+    <div id="viewer-dots"></div><div id="max-viewer-label">1</div>
     <div id="expiry-display"></div>
     <div id="status-pill"><div id="status-dot"></div><span id="status-text"></span></div>
     <span id="lock-icon"></span><span id="lock-text"></span>
     <div id="log-list"><div id="log-empty"></div></div>
-    <div id="key-input-wrap" style="display:none"><input id="key-input" type="text"></div>
-    <!-- Legacy lock-stream-btn alias — real toggle is #lock-toggle -->
+    <div id="key-input-wrap"><input id="key-input" type="text"></div>
     <div id="lock-stream-btn"></div>
   </div>
+</div>
 
-</div><!-- /camera-mode -->
-
-<!-- ════════════════════════════════════
-     RECEIVER MODE (OBS Browser Source)
-═════════════════════════════════════ -->
 <div id="receiver-mode">
   <video id="remote-video" autoplay playsinline></video>
   <div id="rx-emoji-stage"></div>
   <div class="rx-overlay" id="rx-overlay">
     <div class="rx-spinner" id="rx-spinner"></div>
-    <div class="rx-label" id="rx-label">Connecting…</div>
+    <div class="rx-label" id="rx-label">Connecting&#x2026;</div>
     <div class="rx-error" id="rx-error" style="display:none"></div>
   </div>
 </div>
 
-<!-- Alert -->
-<div id="alert-overlay">
-  <div class="alert-banner" id="alert-banner">
-    <span id="alert-msg">Viewer connected</span>
-  </div>
-</div>
-
+<div id="alert-overlay"><div class="alert-banner" id="alert-banner"><span id="alert-msg">Viewer connected</span></div></div>
 <div id="toast"></div>
 
 <script>
-// ════════════════════════════════════════════════════════
-//  PhoneCam — Free wireless camera for OBS / Twitch
-// ════════════════════════════════════════════════════════
+const params=new URLSearchParams(window.location.search);
+const CAM_ID=params.get('camera'),RX_TOKEN=params.get('token');
+const IS_RX=!!(CAM_ID&&RX_TOKEN);
 
-const params   = new URLSearchParams(window.location.search);
-const CAM_ID   = params.get('camera');
-const RX_TOKEN = params.get('token');
-const IS_RX    = !!(CAM_ID && RX_TOKEN);
+let localStream=null,peer=null,peerIdReady=null,accessKey='';
+let maxViewers=1,activeViewers=0,streamLocked=false,keyVisible=false;
+let micEnabled=true,videoEnabled=true,facingMode='environment',torchEnabled=false;
+let currentRes={width:1920,height:1080},expirySeconds=86400,expiryInterval=null;
+let authenticatedPeers=new Set(),activeConnMap=new Map(),heartbeatInterval=null;
+let streamStartTime=null,streamTimerInt=null,emojiTrayOpen=false,settingsOpen=false;
+let rxPingInterval=null,rxDataConn=null;
 
-// ── State ─────────────────────────────────────────────
-let localStream       = null;
-let peer              = null;
-let peerIdReady       = null;
-let accessKey         = '';
-let maxViewers        = 1;
-let activeViewers     = 0;
-let streamLocked      = false;
-let keyVisible        = false;
-let micEnabled        = true;
-let videoEnabled      = true;
-let facingMode        = 'environment';
-let torchEnabled      = false;
-let currentRes        = { width: 1920, height: 1080 };
-let expirySeconds     = 86400;
-let expiryInterval    = null;
-let authenticatedPeers = new Set();
-let activeConnMap     = new Map();
-let heartbeatInterval = null;
-let streamStartTime   = null;
-let streamTimerInt    = null;
-let emojiTrayOpen     = false;
-let settingsOpen      = false;
+IS_RX?startReceiver(CAM_ID,RX_TOKEN):startCamera();
 
-IS_RX ? startReceiver(CAM_ID, RX_TOKEN) : startCamera();
+function generateKey(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let k='',a=new Uint8Array(12);crypto.getRandomValues(a);for(let i=0;i<12;i++){if(i>0&&i%4===0)k+='-';k+=c[a[i]%c.length];}return k;}
+async function hashToken(key){const d=new TextEncoder().encode(key.toUpperCase().replace(/-/g,'').trim());const b=await crypto.subtle.digest('SHA-256',d);return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');}
 
-// ════════════════════════════════════════════════════════
-//  CRYPTO
-// ════════════════════════════════════════════════════════
-
-function generateKey() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let k = '', arr = new Uint8Array(12);
-  crypto.getRandomValues(arr);
-  for (let i = 0; i < 12; i++) {
-    if (i > 0 && i % 4 === 0) k += '-';
-    k += chars[arr[i] % chars.length];
-  }
-  return k;
-}
-
-async function hashToken(key) {
-  const data = new TextEncoder().encode(key.toUpperCase().replace(/-/g,'').trim());
-  const buf  = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-// ════════════════════════════════════════════════════════
-//  CAMERA MODE
-// ════════════════════════════════════════════════════════
-
-async function startCamera() {
-  accessKey = generateKey();
+async function startCamera(){
+  accessKey=generateKey();
   await initStream();
   initPeer();
   startExpiryTimer();
 
-  // Return-to-foreground: reinit camera if track died in background
-  document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible') return;
-    const vt = localStream?.getVideoTracks()[0];
-    if (!vt || vt.readyState === 'ended') await initStream();
-    if (peer?.disconnected) { try { peer.reconnect(); } catch(e){} }
+  // Alt-tab fix: reattach video source to wake frozen decoder on iOS/Android
+  document.addEventListener('visibilitychange',async()=>{
+    if(document.visibilityState!=='visible')return;
+    const vt=localStream?.getVideoTracks()[0];
+    const vid=document.getElementById('local-video');
+    if(!vt||vt.readyState==='ended'){
+      await initStream();
+    }else{
+      try{vid.srcObject=null;await new Promise(r=>setTimeout(r,40));vid.srcObject=localStream;await vid.play();}catch(e){}
+    }
+    if(peer?.disconnected){try{peer.reconnect();}catch(e){}}
   });
 
-  // Orientation: reapply constraints without a full restart
-  const onOrient = () => setTimeout(async () => {
-    const vt = localStream?.getVideoTracks()[0];
-    if (!vt || vt.readyState === 'ended') { await initStream(); return; }
-    try { await vt.applyConstraints({ width:{ideal:currentRes.width}, height:{ideal:currentRes.height}, frameRate:{ideal:30} }); } catch(e){}
-  }, 350);
-  screen.orientation?.addEventListener('change', onOrient);
-  window.addEventListener('orientationchange', onOrient);
+  const onOrient=()=>setTimeout(async()=>{
+    const vt=localStream?.getVideoTracks()[0];
+    if(!vt||vt.readyState==='ended'){await initStream();return;}
+    try{await vt.applyConstraints({width:{ideal:currentRes.width},height:{ideal:currentRes.height},frameRate:{ideal:30}});}catch(e){}
+  },350);
+  screen.orientation?.addEventListener('change',onOrient);
+  window.addEventListener('orientationchange',onOrient);
 }
 
-function buildIceConfig() {
-  return {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'turn:global.relay.metered.ca:80',  username:'openrelayproject', credential:'openrelayproject' },
-      { urls: 'turn:global.relay.metered.ca:443', username:'openrelayproject', credential:'openrelayproject' }
-    ]
-  };
-}
+function buildIceConfig(){return{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'turn:global.relay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},{urls:'turn:global.relay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'}]};}
 
-function initPeer() {
-  if (peer) { try { peer.destroy(); } catch(e){} }
-  peer = new Peer(undefined, { config: buildIceConfig() });
-
-  peer.on('open', async (id) => {
-    peerIdReady = id;
-    const token = await hashToken(accessKey);
-    const disp  = document.getElementById('peer-id-display');
-    disp.textContent = id.slice(0,8).toUpperCase();
-    disp.classList.remove('loading');
-    updateObsUrl(id, token);
+function initPeer(){
+  if(peer){try{peer.destroy();}catch(e){}}
+  peer=new Peer(undefined,{config:buildIceConfig()});
+  peer.on('open',async id=>{
+    peerIdReady=id;
+    const token=await hashToken(accessKey);
+    const d=document.getElementById('peer-id-display');
+    d.textContent=id.slice(0,8).toUpperCase();d.classList.remove('loading');
+    updateObsUrl(id,token);
   });
-
-  peer.on('error',      (e)  => { if (e.type==='network'||e.type==='server-error') setTimeout(initPeer, 5000); });
-  peer.on('disconnected', () => { try { peer.reconnect(); } catch(e){} });
-
-  // Auth + heartbeat gate
-  peer.on('connection', (conn) => {
-    conn.on('data', async (data) => {
-      // ── Auth ──────────────────────────────
-      if (data?.type === 'auth') {
-        const expected   = await hashToken(accessKey);
-        const callerPeer = conn.peer;
-
-        if (streamLocked) {
-          conn.send({ type:'auth-fail', reason:'locked', msg:'Stream locked' });
-          conn.close(); return;
+  peer.on('error',e=>{if(e.type==='network'||e.type==='server-error')setTimeout(initPeer,5000);});
+  peer.on('disconnected',()=>{try{peer.reconnect();}catch(e){}});
+  peer.on('connection',conn=>{
+    conn.on('data',async data=>{
+      if(data?.type==='auth'){
+        const exp=await hashToken(accessKey),cp=conn.peer;
+        if(streamLocked){conn.send({type:'auth-fail',reason:'locked',msg:'Locked'});conn.close();return;}
+        if(activeViewers>=maxViewers){
+          let stale=null;
+          for(const[ep,info]of activeConnMap.entries()){if(info.callRef&&Date.now()-info.lastPing>8000){stale=ep;break;}}
+          if(stale)cleanupPeer(stale,'replaced');
+          else{conn.send({type:'auth-fail',reason:'max',msg:'Max viewers'});conn.close();return;}
         }
-
-        if (activeViewers >= maxViewers) {
-          // Boot stale slot instead of hard-rejecting (handles OBS cache refresh)
-          let stalePeer = null;
-          for (const [ep, info] of activeConnMap.entries()) {
-            if (info.callRef && Date.now() - info.lastPing > 8000) { stalePeer = ep; break; }
-          }
-          if (stalePeer) {
-            cleanupPeer(stalePeer, 'replaced by reconnect');
-          } else {
-            conn.send({ type:'auth-fail', reason:'max', msg:`Max viewers (${maxViewers})` });
-            conn.close(); return;
-          }
-        }
-
-        if (data.token !== expected) {
-          conn.send({ type:'auth-fail', reason:'key', msg:'Invalid key' });
-          conn.close();
-          showToast('⚠ Wrong access key', 'red');
-          triggerAlert('⚠ Wrong Key');
-          return;
-        }
-
-        authenticatedPeers.add(callerPeer);
-        activeConnMap.set(callerPeer, { dataConn:conn, lastPing:Date.now(), callRef:null });
-        conn.send({ type:'auth-ok' });
-        setTimeout(() => authenticatedPeers.delete(callerPeer), 20000);
-
-        conn.on('close', () => cleanupPeer(callerPeer, 'data channel closed'));
-        conn.on('error', () => cleanupPeer(callerPeer, 'data channel error'));
+        if(data.token!==exp){conn.send({type:'auth-fail',reason:'key',msg:'Bad key'});conn.close();showToast('⚠ Wrong access key','red');triggerAlert('⚠ Wrong Key');return;}
+        authenticatedPeers.add(cp);
+        activeConnMap.set(cp,{dataConn:conn,lastPing:Date.now(),callRef:null});
+        conn.send({type:'auth-ok'});
+        setTimeout(()=>authenticatedPeers.delete(cp),20000);
+        conn.on('close',()=>cleanupPeer(cp,'closed'));
+        conn.on('error',()=>cleanupPeer(cp,'error'));
       }
-
-      // ── Heartbeat ─────────────────────────
-      if (data?.type === 'ping') {
-        const info = activeConnMap.get(conn.peer);
-        if (info) info.lastPing = Date.now();
-        try { conn.send({ type:'pong' }); } catch(e){}
-      }
+      if(data?.type==='ping'){const i=activeConnMap.get(conn.peer);if(i)i.lastPing=Date.now();try{conn.send({type:'pong'});}catch(e){}}
     });
   });
-
-  // Answer authenticated calls only
-  peer.on('call', (call) => {
-    if (!authenticatedPeers.has(call.peer)) {
-      setTimeout(() => { try { call.close(); } catch(e){} }, 500); return;
-    }
+  peer.on('call',call=>{
+    if(!authenticatedPeers.has(call.peer)){setTimeout(()=>{try{call.close();}catch(e){}},500);return;}
     authenticatedPeers.delete(call.peer);
     call.answer(localStream);
-
-    const info = activeConnMap.get(call.peer);
-    if (info) { info.callRef = call; info.lastPing = Date.now(); }
-
-    activeViewers++;
-    updateViewerUI();
-    triggerConnectionAlert();
-
-    call.on('close', () => cleanupPeer(call.peer, 'call closed'));
-    call.on('error', () => cleanupPeer(call.peer, 'call error'));
+    const info=activeConnMap.get(call.peer);
+    if(info){info.callRef=call;info.lastPing=Date.now();}
+    activeViewers++;updateViewerUI();triggerConnectionAlert();
+    call.on('close',()=>cleanupPeer(call.peer,'closed'));
+    call.on('error',()=>cleanupPeer(call.peer,'error'));
   });
-
-  // Heartbeat cleanup — 5s interval, 12s timeout
-  if (heartbeatInterval) clearInterval(heartbeatInterval);
-  heartbeatInterval = setInterval(() => {
-    const now = Date.now();
-    for (const [pid, info] of activeConnMap.entries()) {
-      if (info.callRef && now - info.lastPing > 12000) cleanupPeer(pid, 'heartbeat timeout');
-    }
-  }, 5000);
+  if(heartbeatInterval)clearInterval(heartbeatInterval);
+  heartbeatInterval=setInterval(()=>{const now=Date.now();for(const[pid,info]of activeConnMap.entries())if(info.callRef&&now-info.lastPing>12000)cleanupPeer(pid,'timeout');},5000);
 }
 
-function cleanupPeer(peerId, _reason) {
-  if (!activeConnMap.has(peerId)) return;
-  const { callRef, dataConn } = activeConnMap.get(peerId);
-  try { callRef?.close();  } catch(e){}
-  try { dataConn?.close(); } catch(e){}
-  activeConnMap.delete(peerId);
-  activeViewers = Math.max(0, activeViewers - 1);
-  updateViewerUI();
+function cleanupPeer(pid){
+  if(!activeConnMap.has(pid))return;
+  const{callRef,dataConn}=activeConnMap.get(pid);
+  try{callRef?.close();}catch(e){}try{dataConn?.close();}catch(e){}
+  activeConnMap.delete(pid);activeViewers=Math.max(0,activeViewers-1);updateViewerUI();
 }
 
-// ── Camera stream ──────────────────────────────────────
-async function initStream() {
-  if (localStream) localStream.getTracks().forEach(t => t.stop());
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode, width:{ideal:currentRes.width}, height:{ideal:currentRes.height}, frameRate:{ideal:30} },
-      audio: { echoCancellation:true, noiseSuppression:true }
+async function initStream(){
+  if(localStream)localStream.getTracks().forEach(t=>t.stop());
+  try{
+    localStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode,width:{ideal:currentRes.width},height:{ideal:currentRes.height},frameRate:{ideal:30}},
+      audio:{echoCancellation:true,noiseSuppression:true}
     });
-    const vid = document.getElementById('local-video');
-    vid.srcObject = localStream;
-    vid.className = facingMode === 'user' ? '' : 'rear';
-    localStream.getAudioTracks().forEach(t => t.enabled = micEnabled);
-    localStream.getVideoTracks().forEach(t => t.enabled = videoEnabled);
-
-    // Torch capability check
-    const vt = localStream.getVideoTracks()[0];
-    if (vt) {
-      const caps = vt.getCapabilities?.() ?? {};
-      document.getElementById('btn-torch').style.display = caps.torch ? 'flex' : 'none';
-    }
-
-    // Replace tracks on live peer connections (no stream interrupt)
-    if (peer?._connections) {
-      Object.values(peer._connections).forEach(conns => conns.forEach(conn => {
-        if (!conn.peerConnection) return;
-        const senders = conn.peerConnection.getSenders();
-        localStream.getTracks().forEach(t => {
-          const s = senders.find(x => x.track?.kind === t.kind);
-          if (s) s.replaceTrack(t).catch(()=>{});
-        });
-      }));
-    }
-  } catch(err) {
-    showToast('Camera access denied', 'red');
-  }
+    const vid=document.getElementById('local-video');
+    vid.srcObject=localStream;vid.className=facingMode==='user'?'':'rear';
+    localStream.getAudioTracks().forEach(t=>t.enabled=micEnabled);
+    localStream.getVideoTracks().forEach(t=>t.enabled=videoEnabled);
+    const vt=localStream.getVideoTracks()[0];
+    if(vt){const caps=vt.getCapabilities?.()??{};document.getElementById('btn-torch').style.display=caps.torch?'flex':'none';}
+    if(peer?._connections){Object.values(peer._connections).forEach(cs=>cs.forEach(c=>{if(!c.peerConnection)return;const s=c.peerConnection.getSenders();localStream.getTracks().forEach(t=>{const x=s.find(y=>y.track?.kind===t.kind);if(x)x.replaceTrack(t).catch(()=>{});});}));}
+  }catch(e){showToast('Camera access denied','red');}
 }
 
-// ── Controls ───────────────────────────────────────────
-function flipCamera() {
-  facingMode = facingMode === 'environment' ? 'user' : 'environment';
-  torchEnabled = false;
-  initStream();
+function flipCamera(){facingMode=facingMode==='environment'?'user':'environment';torchEnabled=false;initStream();}
+function toggleMic(){
+  micEnabled=!micEnabled;localStream?.getAudioTracks().forEach(t=>t.enabled=micEnabled);
+  const b=document.getElementById('btn-mic');b.classList.toggle('active',micEnabled);b.classList.toggle('off',!micEnabled);
+  document.getElementById('mic-icon').innerHTML=micEnabled
+    ?'<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>'
+    :'<line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23M12 19v4M8 23h8"/>';
+}
+function toggleVideo(){
+  videoEnabled=!videoEnabled;localStream?.getVideoTracks().forEach(t=>t.enabled=videoEnabled);
+  const b=document.getElementById('btn-video');b.classList.toggle('active',videoEnabled);b.classList.toggle('off',!videoEnabled);
+}
+async function toggleTorch(){
+  torchEnabled=!torchEnabled;const vt=localStream?.getVideoTracks()[0];
+  if(vt?.applyConstraints)try{await vt.applyConstraints({advanced:[{torch:torchEnabled}]});}catch(e){}
+  document.getElementById('btn-torch').classList.toggle('active',torchEnabled);
+}
+async function setRes(w,h,label,el){
+  currentRes={width:w,height:h};
+  document.querySelectorAll('.res-chip').forEach(c=>c.classList.remove('active'));el.classList.add('active');
+  const vt=localStream?.getVideoTracks()[0];
+  if(vt&&vt.readyState==='live'){try{await vt.applyConstraints({width:{ideal:w},height:{ideal:h},frameRate:{ideal:30}});return;}catch(e){}}
+  await initStream();
 }
 
-function toggleMic() {
-  micEnabled = !micEnabled;
-  localStream?.getAudioTracks().forEach(t => t.enabled = micEnabled);
-  const btn = document.getElementById('btn-mic');
-  btn.classList.toggle('active', micEnabled);
-  btn.classList.toggle('off', !micEnabled);
-  document.getElementById('mic-icon').innerHTML = micEnabled
-    ? '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>'
-    : '<line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23M12 19v4M8 23h8"/>';
+function sendReaction(emoji){
+  spawnEmoji(emoji,document.getElementById('emoji-stage-cam'),false);
+  for(const[,info]of activeConnMap.entries()){try{info.dataConn.send({type:'reaction',emoji});}catch(e){}}
+}
+function spawnEmoji(emoji,container,large=true){
+  if(!container)return;
+  const el=document.createElement('div');el.className='floating-emoji';el.textContent=emoji;
+  if(large)el.style.fontSize='56px';
+  const x=(8+Math.random()*80).toFixed(1);
+  const drift=((Math.random()-.5)*55).toFixed(1);
+  const dur=(2.6+Math.random()*1.6).toFixed(2);
+  const travel=-(35+Math.random()*38).toFixed(1)+'vh';
+  const r0=((Math.random()-.5)*22).toFixed(1)+'deg',r1=((Math.random()-.5)*12).toFixed(1)+'deg',r2=((Math.random()-.5)*28).toFixed(1)+'deg';
+  el.style.cssText+=`left:${x}%;--drift:${drift}px;--dur:${dur}s;--travel:${travel};--r0:${r0};--r1:${r1};--r2:${r2}`;
+  container.appendChild(el);el.addEventListener('animationend',()=>el.remove());
 }
 
-function toggleVideo() {
-  videoEnabled = !videoEnabled;
-  localStream?.getVideoTracks().forEach(t => t.enabled = videoEnabled);
-  document.getElementById('btn-video').classList.toggle('active', videoEnabled);
-  document.getElementById('btn-video').classList.toggle('off', !videoEnabled);
+function toggleEmojiTray(){
+  emojiTrayOpen=!emojiTrayOpen;
+  document.getElementById('ctrl-row').style.display=emojiTrayOpen?'none':'flex';
+  document.getElementById('emoji-row').style.display=emojiTrayOpen?'flex':'none';
+  document.getElementById('btn-emoji').classList.toggle('active',emojiTrayOpen);
 }
-
-async function toggleTorch() {
-  torchEnabled = !torchEnabled;
-  const vt = localStream?.getVideoTracks()[0];
-  if (vt?.applyConstraints) try { await vt.applyConstraints({ advanced:[{torch:torchEnabled}] }); } catch(e){}
-  document.getElementById('btn-torch').classList.toggle('active', torchEnabled);
-}
-
-async function setRes(w, h, label, el) {
-  currentRes = { width:w, height:h };
-  document.querySelectorAll('.res-chip').forEach(c => c.classList.remove('active'));
-  el.classList.add('active');
-  // Try in-place resolution change first (no OBS stream interruption)
-  const vt = localStream?.getVideoTracks()[0];
-  if (vt && vt.readyState === 'live') {
-    try { await vt.applyConstraints({ width:{ideal:w}, height:{ideal:h}, frameRate:{ideal:30} }); return; } catch(e){}
-  }
-  await initStream(); // fallback
-}
-
-// ── Emoji reactions ────────────────────────────────────
-function sendReaction(emoji) {
-  // Animate on phone preview
-  spawnEmoji(emoji, document.getElementById('emoji-stage-cam'), false);
-  // Send to all OBS receivers via data channel
-  for (const [, info] of activeConnMap.entries()) {
-    try { info.dataConn.send({ type:'reaction', emoji }); } catch(e){}
-  }
-}
-
-function spawnEmoji(emoji, container, large = true) {
-  if (!container) return;
-  const el  = document.createElement('div');
-  el.className  = 'floating-emoji';
-  el.textContent = emoji;
-  if (large) el.style.fontSize = '56px';
-
-  const x      = 8 + Math.random() * 80;
-  const drift  = (Math.random() - 0.5) * 55;
-  const dur    = 2.6 + Math.random() * 1.6;
-  const travel = -(35 + Math.random() * 38) + 'vh';
-  const r0 = ((Math.random()-0.5)*22).toFixed(1)+'deg';
-  const r1 = ((Math.random()-0.5)*12).toFixed(1)+'deg';
-  const r2 = ((Math.random()-0.5)*28).toFixed(1)+'deg';
-  el.style.cssText += `left:${x}%;--drift:${drift}px;--dur:${dur}s;--travel:${travel};--r0:${r0};--r1:${r1};--r2:${r2}`;
-  container.appendChild(el);
-  el.addEventListener('animationend', () => el.remove());
-}
-
-// ── UI panels ──────────────────────────────────────────
-function toggleEmojiTray() {
-  emojiTrayOpen = !emojiTrayOpen;
-  document.getElementById('emoji-tray').classList.toggle('open', emojiTrayOpen);
-  document.getElementById('btn-emoji').classList.toggle('active', emojiTrayOpen);
-}
-
-function toggleSettings() {
-  settingsOpen = !settingsOpen;
-  document.getElementById('settings-sheet').classList.toggle('open', settingsOpen);
-  document.getElementById('sheet-backdrop').classList.toggle('open', settingsOpen);
-  if (settingsOpen && emojiTrayOpen) {
-    emojiTrayOpen = false;
-    document.getElementById('emoji-tray').classList.remove('open');
+function toggleSettings(){
+  settingsOpen=!settingsOpen;
+  document.getElementById('settings-sheet').classList.toggle('open',settingsOpen);
+  document.getElementById('sheet-backdrop').classList.toggle('open',settingsOpen);
+  if(settingsOpen&&emojiTrayOpen){
+    emojiTrayOpen=false;
+    document.getElementById('ctrl-row').style.display='flex';
+    document.getElementById('emoji-row').style.display='none';
     document.getElementById('btn-emoji').classList.remove('active');
   }
 }
 
-// ── Security controls ──────────────────────────────────
-function toggleStreamLock() {
-  streamLocked = !streamLocked;
-  document.getElementById('lock-toggle').classList.toggle('on', streamLocked);
-  showToast(streamLocked ? '🔒 Stream locked' : '🔓 Stream unlocked', streamLocked ? 'yellow' : 'purple');
+function toggleStreamLock(){streamLocked=!streamLocked;document.getElementById('lock-toggle').classList.toggle('on',streamLocked);showToast(streamLocked?'🔒 Stream locked':'🔓 Stream unlocked',streamLocked?'yellow':'purple');}
+function regenerateKey(){accessKey=generateKey();renderKey();updateObsUrlFromState();showToast('🔑 New key — update OBS URL','yellow');}
+function renderKey(){document.getElementById('key-display').textContent=keyVisible?accessKey:'••••••••••••';}
+function toggleKeyVisibility(){
+  keyVisible=!keyVisible;renderKey();
+  document.getElementById('eye-icon').innerHTML=keyVisible
+    ?'<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+    :'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+}
+function copyKey(){navigator.clipboard.writeText(accessKey).then(()=>showToast('✓ Key copied','purple')).catch(()=>prompt('Access key:',accessKey));}
+function setMaxViewers(n){maxViewers=n;document.querySelectorAll('[id^="vc-"]').forEach(c=>c.classList.remove('active'));document.getElementById('vc-'+n)?.classList.add('active');document.getElementById('max-viewer-label').textContent=n;}
+
+function updateViewerUI(){
+  const c=document.getElementById('viewer-count');if(c)c.textContent=activeViewers;
+  document.getElementById('rec-badge')?.classList.toggle('show',activeViewers>0);
+  if(activeViewers>0&&!streamStartTime){streamStartTime=Date.now();document.getElementById('stream-timer')?.classList.add('show');streamTimerInt=setInterval(tickTimer,1000);}
+  else if(activeViewers===0&&streamTimerInt){clearInterval(streamTimerInt);streamTimerInt=null;streamStartTime=null;const t=document.getElementById('stream-timer');if(t){t.textContent='';t.classList.remove('show');}}
+}
+function updateViewerDots(){}
+function tickTimer(){
+  if(!streamStartTime)return;
+  const s=Math.floor((Date.now()-streamStartTime)/1000);
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+  const t=document.getElementById('stream-timer');
+  if(t)t.textContent=h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;
 }
 
-function regenerateKey() {
-  accessKey = generateKey();
-  renderKey();
-  updateObsUrlFromState();
-  showToast('🔑 New key — update OBS URL', 'yellow');
+function startExpiryTimer(){if(expiryInterval)clearInterval(expiryInterval);expirySeconds=86400;expiryInterval=setInterval(()=>{if(--expirySeconds<=0)rotatePeerId();},1000);}
+async function rotatePeerId(){
+  peerIdReady=null;
+  const d=document.getElementById('peer-id-display');if(d){d.textContent='Rotating…';d.classList.add('loading');}
+  if(heartbeatInterval){clearInterval(heartbeatInterval);heartbeatInterval=null;}
+  if(peer){try{peer.destroy();}catch(e){}}
+  authenticatedPeers.clear();activeConnMap.clear();activeViewers=0;updateViewerUI();
+  initPeer();startExpiryTimer();showToast('🔄 ID rotated — update OBS','yellow');
 }
 
-function renderKey() {
-  document.getElementById('key-display').textContent = keyVisible ? accessKey : '••••••••••••';
-}
-function toggleKeyVisibility() {
-  keyVisible = !keyVisible;
-  renderKey();
-  document.getElementById('eye-icon').innerHTML = keyVisible
-    ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
-    : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
-}
-function copyKey() {
-  navigator.clipboard.writeText(accessKey)
-    .then(() => showToast('✓ Key copied', 'purple'))
-    .catch(() => prompt('Access key:', accessKey));
+function updateObsUrl(id,token){const url=`${window.location.href.split('?')[0]}?camera=${id}&token=${token}`;const el=document.getElementById('obs-url-preview');if(el)el.textContent=url;}
+async function updateObsUrlFromState(){if(!peerIdReady)return;const t=await hashToken(accessKey);updateObsUrl(peerIdReady,t);}
+function copyId(){if(!peerIdReady){showToast('Not ready yet','red');return;}navigator.clipboard.writeText(peerIdReady).then(()=>showToast('✓ ID copied','purple')).catch(()=>prompt('Camera ID:',peerIdReady));}
+async function copyObsUrl(){
+  if(!peerIdReady){showToast('Not ready yet','red');return;}
+  const t=await hashToken(accessKey);
+  const url=`${window.location.href.split('?')[0]}?camera=${peerIdReady}&token=${t}`;
+  navigator.clipboard.writeText(url).then(()=>showToast('✓ OBS URL copied!','purple')).catch(()=>prompt('OBS URL:',url));
 }
 
-function setMaxViewers(n) {
-  maxViewers = n;
-  document.querySelectorAll('[id^="vc-"]').forEach(c => c.classList.remove('active'));
-  document.getElementById(`vc-${n}`)?.classList.add('active');
-  document.getElementById('max-viewer-label').textContent = n;
+function setStatus(){}function secLog(){}function clearLog(){}function toggleKeyEdit(){}function applyCustomKey(){}
+function triggerConnectionAlert(){triggerAlert('● Viewer connected');}
+function triggerAlert(msg){const b=document.getElementById('alert-banner');document.getElementById('alert-msg').textContent=msg;b.classList.add('show');setTimeout(()=>b.classList.remove('show'),2800);}
+
+let toastTimer=null;
+function showToast(msg,color=''){const t=document.getElementById('toast');if(toastTimer)clearTimeout(toastTimer);t.textContent=msg;t.className=('show '+color).trim();toastTimer=setTimeout(()=>t.classList.remove('show'),2500);}
+
+function startReceiver(targetId,token){
+  document.getElementById('camera-mode').style.display='none';
+  document.getElementById('receiver-mode').style.display='block';
+  document.title='StreamCam Feed';document.body.style.background='#000';
+  peer=new Peer(undefined,{config:buildIceConfig()});
+  peer.on('open',()=>authAndConnect(targetId,token));
+  peer.on('error',e=>{setRxLabel('Error: '+e.type+'. Retrying…');setTimeout(()=>authAndConnect(targetId,token),5000);});
 }
-
-// ── Viewer UI + stream timer ───────────────────────────
-function updateViewerUI() {
-  const countEl = document.getElementById('viewer-count');
-  if (countEl) countEl.textContent = activeViewers;
-  document.getElementById('rec-badge')?.classList.toggle('show', activeViewers > 0);
-
-  if (activeViewers > 0 && !streamStartTime) {
-    streamStartTime = Date.now();
-    document.getElementById('stream-timer')?.classList.add('show');
-    streamTimerInt  = setInterval(tickStreamTimer, 1000);
-  } else if (activeViewers === 0 && streamTimerInt) {
-    clearInterval(streamTimerInt); streamTimerInt = null; streamStartTime = null;
-    const t = document.getElementById('stream-timer');
-    if (t) { t.textContent = ''; t.classList.remove('show'); }
-  }
-}
-function updateViewerDots() {} // not used in new UI
-
-function tickStreamTimer() {
-  if (!streamStartTime) return;
-  const s   = Math.floor((Date.now() - streamStartTime) / 1000);
-  const h   = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  const t   = document.getElementById('stream-timer');
-  if (t) t.textContent = h > 0
-    ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
-    : `${m}:${String(sec).padStart(2,'0')}`;
-}
-
-// ── Expiry + ID rotation ───────────────────────────────
-function startExpiryTimer() {
-  if (expiryInterval) clearInterval(expiryInterval);
-  expirySeconds = 86400;
-  expiryInterval = setInterval(() => { if (--expirySeconds <= 0) rotatePeerId(); }, 1000);
-}
-
-async function rotatePeerId() {
-  peerIdReady = null;
-  const disp = document.getElementById('peer-id-display');
-  if (disp) { disp.textContent = 'Rotating…'; disp.classList.add('loading'); }
-  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-  if (peer) { try { peer.destroy(); } catch(e){} }
-  authenticatedPeers.clear(); activeConnMap.clear();
-  activeViewers = 0; updateViewerUI();
-  initPeer(); startExpiryTimer();
-  showToast('🔄 ID rotated — update OBS', 'yellow');
-}
-
-// ── URL helpers ────────────────────────────────────────
-function updateObsUrl(id, token) {
-  const base = window.location.href.split('?')[0];
-  const el   = document.getElementById('obs-url-preview');
-  if (el) el.textContent = `${base}?camera=${id}&token=${token}`;
-}
-async function updateObsUrlFromState() {
-  if (!peerIdReady) return;
-  const token = await hashToken(accessKey);
-  updateObsUrl(peerIdReady, token);
-}
-function copyId() {
-  if (!peerIdReady) { showToast('Not ready yet', 'red'); return; }
-  navigator.clipboard.writeText(peerIdReady)
-    .then(() => showToast('✓ ID copied', 'purple'))
-    .catch(() => prompt('Camera ID:', peerIdReady));
-}
-async function copyObsUrl() {
-  if (!peerIdReady) { showToast('Not ready yet', 'red'); return; }
-  const token = await hashToken(accessKey);
-  const url   = `${window.location.href.split('?')[0]}?camera=${peerIdReady}&token=${token}`;
-  navigator.clipboard.writeText(url)
-    .then(() => showToast('✓ OBS URL copied!', 'purple'))
-    .catch(() => prompt('OBS URL:', url));
-}
-
-// ── Stubs for legacy function calls ───────────────────
-function setStatus() {}
-function secLog()   {}
-function clearLog() {}
-function toggleKeyEdit()   {}
-function applyCustomKey()  {}
-
-// ── Alerts ─────────────────────────────────────────────
-function triggerConnectionAlert() { triggerAlert('● Viewer connected'); }
-function triggerAlert(msg) {
-  const b = document.getElementById('alert-banner');
-  document.getElementById('alert-msg').textContent = msg;
-  b.classList.add('show');
-  setTimeout(() => b.classList.remove('show'), 2800);
-}
-
-// ── Toast ──────────────────────────────────────────────
-let toastTimer = null;
-function showToast(msg, color = '') {
-  const t = document.getElementById('toast');
-  if (toastTimer) clearTimeout(toastTimer);
-  t.textContent = msg;
-  t.className = `show ${color}`.trim();
-  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
-}
-
-// ════════════════════════════════════════════════════════
-//  RECEIVER MODE (OBS Browser Source)
-// ════════════════════════════════════════════════════════
-
-let rxPingInterval = null;
-let rxDataConn     = null;
-
-function startReceiver(targetId, token) {
-  document.getElementById('camera-mode').style.display = 'none';
-  document.getElementById('receiver-mode').style.display = 'block';
-  document.title = 'PhoneCam Feed';
-  document.body.style.background = '#000';
-
-  peer = new Peer(undefined, { config: buildIceConfig() });
-  peer.on('open', () => authAndConnect(targetId, token));
-  peer.on('error', (e) => {
-    setRxLabel(`Error: ${e.type}. Retrying…`);
-    setTimeout(() => authAndConnect(targetId, token), 5000);
-  });
-}
-
-function authAndConnect(targetId, token) {
+function authAndConnect(targetId,token){
   setRxLabel('Connecting…');
-  if (rxPingInterval) { clearInterval(rxPingInterval); rxPingInterval = null; }
-  if (rxDataConn)     { try { rxDataConn.close(); } catch(e){} rxDataConn = null; }
-
-  let dc;
-  try { dc = peer.connect(targetId, { reliable:true }); } catch(e) {
-    setRxLabel('Failed. Retrying…');
-    setTimeout(() => authAndConnect(targetId, token), 4000); return;
-  }
-
-  let authed = false;
-
-  dc.on('open', () => { setRxLabel('Authenticating…'); dc.send({ type:'auth', token }); });
-
-  dc.on('data', (data) => {
-    if (data?.type === 'auth-ok') {
-      authed    = true;
-      rxDataConn = dc;
-      setRxLabel('Authenticated — opening stream…');
-      rxPingInterval = setInterval(() => { try { dc.send({ type:'ping' }); } catch(e){} }, 4000);
-      requestStream(targetId);
-    } else if (data?.type === 'auth-fail') {
-      showRxError(
-        data.reason === 'key'    ? '🔑 Invalid access key' :
-        data.reason === 'locked' ? '🔒 Stream is locked'   :
-        data.reason === 'max'    ? '👥 Max viewers reached' :
-        `Rejected: ${data.msg}`
-      );
-    } else if (data?.type === 'reaction') {
-      // Emoji from phone → display in OBS
-      spawnEmoji(data.emoji, document.getElementById('rx-emoji-stage'), true);
-    }
+  if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}
+  if(rxDataConn){try{rxDataConn.close();}catch(e){}rxDataConn=null;}
+  let dc;try{dc=peer.connect(targetId,{reliable:true});}catch(e){setRxLabel('Failed. Retrying…');setTimeout(()=>authAndConnect(targetId,token),4000);return;}
+  let authed=false;
+  dc.on('open',()=>{setRxLabel('Authenticating…');dc.send({type:'auth',token});});
+  dc.on('data',data=>{
+    if(data?.type==='auth-ok'){authed=true;rxDataConn=dc;setRxLabel('Opening stream…');rxPingInterval=setInterval(()=>{try{dc.send({type:'ping'});}catch(e){}},4000);requestStream(targetId);}
+    else if(data?.type==='auth-fail'){showRxError(data.reason==='key'?'🔑 Invalid access key':data.reason==='locked'?'🔒 Stream is locked':data.reason==='max'?'👥 Max viewers reached':'Rejected: '+data.msg);}
+    else if(data?.type==='reaction'){spawnEmoji(data.emoji,document.getElementById('rx-emoji-stage'),true);}
   });
-
-  dc.on('close', () => {
-    if (rxPingInterval) { clearInterval(rxPingInterval); rxPingInterval = null; }
-    if (authed) { setRxLabel('Lost connection. Reconnecting…'); setTimeout(() => authAndConnect(targetId, RX_TOKEN), 3000); }
-  });
-  dc.on('error', () => { if (!authed) setTimeout(() => authAndConnect(targetId, token), 4000); });
-
-  setTimeout(() => {
-    if (!authed) { try { dc.close(); } catch(e){} setRxLabel('No response. Retrying…'); setTimeout(() => authAndConnect(targetId, token), 4000); }
-  }, 12000);
+  dc.on('close',()=>{if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}if(authed){setRxLabel('Reconnecting…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);}});
+  dc.on('error',()=>{if(!authed)setTimeout(()=>authAndConnect(targetId,token),4000);});
+  setTimeout(()=>{if(!authed){try{dc.close();}catch(e){}setRxLabel('No response. Retrying…');setTimeout(()=>authAndConnect(targetId,token),4000);}},12000);
 }
-
-function createDummyStream() {
-  try {
-    const c = document.createElement('canvas');
-    c.width = 1; c.height = 1;
-    c.getContext('2d').fillRect(0,0,1,1);
-    return c.captureStream(1);
-  } catch(e) { try { return new MediaStream(); } catch(e2) { return null; } }
+function createDummyStream(){try{const c=document.createElement('canvas');c.width=1;c.height=1;c.getContext('2d').fillRect(0,0,1,1);return c.captureStream(1);}catch(e){try{return new MediaStream();}catch(e2){return null;}}}
+function requestStream(targetId){
+  const dummy=createDummyStream();
+  let call;try{call=dummy?peer.call(targetId,dummy):null;}catch(e){call=null;}
+  if(!call){setRxLabel('Request failed. Retrying…');setTimeout(()=>requestStream(targetId),4000);return;}
+  call.on('stream',s=>{const vid=document.getElementById('remote-video');vid.muted=true;vid.srcObject=s;vid.play().then(()=>setTimeout(()=>{vid.muted=false;},500)).catch(()=>{vid.muted=false;});document.getElementById('rx-overlay').classList.add('hidden');});
+  call.on('close',()=>{if(rxPingInterval){clearInterval(rxPingInterval);rxPingInterval=null;}document.getElementById('rx-overlay').classList.remove('hidden');setRxLabel('Disconnected. Reconnecting…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
+  call.on('error',()=>{setRxLabel('Error. Reconnecting…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),3000);});
+  setTimeout(()=>{if(!document.getElementById('remote-video').srcObject){try{call.close();}catch(e){}setRxLabel('Timeout. Retrying…');setTimeout(()=>authAndConnect(targetId,RX_TOKEN),2000);}},15000);
 }
-
-function requestStream(targetId) {
-  const dummy = createDummyStream();
-  let call;
-  try { call = dummy ? peer.call(targetId, dummy) : null; } catch(e) { call = null; }
-
-  if (!call) {
-    setRxLabel('Stream request failed. Retrying…');
-    setTimeout(() => requestStream(targetId), 4000); return;
-  }
-
-  call.on('stream', (remoteStream) => {
-    const vid = document.getElementById('remote-video');
-    vid.muted = true;
-    vid.srcObject = remoteStream;
-    vid.play()
-      .then(() => setTimeout(() => { vid.muted = false; }, 500))
-      .catch(() => { vid.muted = false; });
-    document.getElementById('rx-overlay').classList.add('hidden');
-  });
-
-  call.on('close', () => {
-    if (rxPingInterval) { clearInterval(rxPingInterval); rxPingInterval = null; }
-    document.getElementById('rx-overlay').classList.remove('hidden');
-    setRxLabel('Camera disconnected. Reconnecting…');
-    setTimeout(() => authAndConnect(targetId, RX_TOKEN), 3000);
-  });
-
-  call.on('error', () => {
-    setRxLabel('Stream error. Reconnecting…');
-    setTimeout(() => authAndConnect(targetId, RX_TOKEN), 3000);
-  });
-
-  setTimeout(() => {
-    if (!document.getElementById('remote-video').srcObject) {
-      try { call.close(); } catch(e){}
-      setRxLabel('Timeout. Retrying…');
-      setTimeout(() => authAndConnect(targetId, RX_TOKEN), 2000);
-    }
-  }, 15000);
-}
-
-function setRxLabel(msg) {
-  document.getElementById('rx-label').textContent  = msg;
-  document.getElementById('rx-label').style.display = '';
-  document.getElementById('rx-error').style.display = 'none';
-  document.getElementById('rx-spinner').style.display = '';
-}
-function showRxError(msg) {
-  document.getElementById('rx-spinner').style.display = 'none';
-  document.getElementById('rx-label').style.display   = 'none';
-  const e = document.getElementById('rx-error');
-  e.style.display = ''; e.textContent = msg;
-}
+function setRxLabel(msg){document.getElementById('rx-label').textContent=msg;document.getElementById('rx-label').style.display='';document.getElementById('rx-error').style.display='none';document.getElementById('rx-spinner').style.display='';}
+function showRxError(msg){document.getElementById('rx-spinner').style.display='none';document.getElementById('rx-label').style.display='none';const e=document.getElementById('rx-error');e.style.display='';e.textContent=msg;}
 </script>
 </body>
 </html>
