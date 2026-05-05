@@ -325,6 +325,16 @@
     .rx-error { font-size: 11px; letter-spacing: 0.08em; color: var(--accent2); text-align: center; padding: 0 24px; }
 
     @media (min-height: 700px) { .video-wrap { height: 260px; } }
+
+    /* ── Landscape / orientation ───────────────── */
+    @media (orientation: landscape) and (max-height: 500px) {
+      .video-wrap { height: 100dvh; position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 5; }
+      #local-video { height: 100dvh; }
+      .cam-header  { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: rgba(15,20,25,0.85); backdrop-filter: blur(8px); }
+      .landscape-hide { display: none !important; }
+      /* Show a small floating controls bar in landscape */
+      .cam-controls { position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; background: rgba(15,20,25,0.85); backdrop-filter: blur(8px); padding: 6px 16px; }
+    }
   </style>
 </head>
 <body>
@@ -374,14 +384,14 @@
     </button>
   </div>
 
-  <div class="res-row">
+  <div class="res-row landscape-hide">
     <div class="res-chip" onclick="setRes(640,360,'360p',this)">360p</div>
-    <div class="res-chip active" onclick="setRes(1280,720,'720p',this)">720p HD</div>
-    <div class="res-chip" onclick="setRes(1920,1080,'1080p',this)">1080p FHD</div>
+    <div class="res-chip" onclick="setRes(1280,720,'720p',this)">720p HD</div>
+    <div class="res-chip active" onclick="setRes(1920,1080,'1080p',this)">1080p FHD</div>
   </div>
 
   <!-- ── CONNECTION PANEL ─────────────────────── -->
-  <div class="panel">
+  <div class="panel landscape-hide">
 
     <div>
       <div class="panel-label">
@@ -572,7 +582,7 @@ let micEnabled      = true;
 let videoEnabled    = true;
 let facingMode      = 'environment';
 let torchEnabled    = false;
-let currentRes      = { width: 1280, height: 720 };
+let currentRes      = { width: 1920, height: 1080 };
 let expirySeconds   = 86400; // 24h
 let expiryInterval  = null;
 let customTurn      = null;
@@ -615,6 +625,36 @@ async function startCamera() {
   initPeer();
   startExpiryTimer();
   secLog('info', 'PhoneCam Secure started');
+
+  // ── Phone tab visibility — reinit stream when user returns to browser ──
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible') return;
+    const videoTrack = localStream?.getVideoTracks()[0];
+    if (!videoTrack || videoTrack.readyState === 'ended') {
+      secLog('info', 'Returning to foreground — reinitialising camera');
+      await initStream();
+    }
+    if (peer?.disconnected) { try { peer.reconnect(); } catch(e){} }
+  });
+
+  // ── Orientation change — reapply constraints without full reinit ──
+  const handleOrientationChange = () => {
+    setTimeout(async () => {
+      const videoTrack = localStream?.getVideoTracks()[0];
+      if (!videoTrack || videoTrack.readyState === 'ended') {
+        await initStream(); return;
+      }
+      try {
+        await videoTrack.applyConstraints({
+          width:  { ideal: currentRes.width },
+          height: { ideal: currentRes.height },
+          frameRate: { ideal: 30 }
+        });
+      } catch(e) { /* constraints not supported — ignore */ }
+    }, 350); // wait for OS rotation to settle
+  };
+  screen.orientation?.addEventListener('change', handleOrientationChange);
+  window.addEventListener('orientationchange', handleOrientationChange);
 }
 
 function buildIceConfig() {
@@ -685,10 +725,24 @@ function initPeer() {
       }
 
       if (activeViewers >= maxViewers) {
-        conn.send({ type: 'auth-fail', reason: 'max', msg: `Max viewers reached (${maxViewers})` });
-        conn.close();
-        secLog('fail', `Auth rejected — max viewers (from ${callerPeer.slice(0,8)})`);
-        return;
+        // Before hard-rejecting, check if any existing slot is stale (no ping in 8s).
+        // OBS browser cache refresh creates a new peer before the old one is cleaned up —
+        // this lets the fresh connection replace the zombie slot immediately.
+        let stalePeer = null;
+        for (const [existingPeer, info] of activeConnMap.entries()) {
+          if (info.callRef && Date.now() - info.lastPing > 8000) {
+            stalePeer = existingPeer; break;
+          }
+        }
+        if (stalePeer) {
+          secLog('warn', `Replacing stale slot ${stalePeer.slice(0,8)} with fresh connection`);
+          cleanupPeer(stalePeer, 'replaced by fresh reconnect');
+        } else {
+          conn.send({ type: 'auth-fail', reason: 'max', msg: `Max viewers reached (${maxViewers})` });
+          conn.close();
+          secLog('fail', `Auth rejected — max viewers (from ${callerPeer.slice(0,8)})`);
+          return;
+        }
       }
 
       if (data.token !== expected) {
@@ -772,19 +826,18 @@ function initPeer() {
     call.on('error', () => cleanupPeer(call.peer, 'call error'));
   });
 
-  // ── Heartbeat cleanup — runs every 10s ──────────────────────
+  // ── Heartbeat cleanup — runs every 5s, boots after 12s silence ──
   if (heartbeatInterval) clearInterval(heartbeatInterval);
   heartbeatInterval = setInterval(() => {
     const now = Date.now();
     for (const [peerId, info] of activeConnMap.entries()) {
-      // Only check peers that have an active call (are counted as viewers)
-      if (!info.callRef) continue;
-      if (now - info.lastPing > 18000) { // 18s no ping = dead connection
+      if (!info.callRef) continue; // not yet streaming — skip
+      if (now - info.lastPing > 12000) {
         secLog('warn', `Heartbeat timeout — cleaning up ${peerId.slice(0,8)}`);
         cleanupPeer(peerId, 'heartbeat timeout');
       }
     }
-  }, 8000);
+  }, 5000);
 }
 
 function cleanupPeer(peerId, reason) {
@@ -866,11 +919,28 @@ async function toggleTorch() {
   }
   document.getElementById('btn-torch').classList.toggle('active', torchEnabled);
 }
-function setRes(w, h, label, el) {
+async function setRes(w, h, label, el) {
   currentRes = { width: w, height: h };
   document.querySelectorAll('.res-chip').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
-  initStream();
+
+  // Try applyConstraints first — changes resolution without interrupting the stream
+  // so OBS never sees a track drop and never goes black
+  const videoTrack = localStream?.getVideoTracks()[0];
+  if (videoTrack && videoTrack.readyState === 'live') {
+    try {
+      await videoTrack.applyConstraints({
+        width:  { ideal: w },
+        height: { ideal: h },
+        frameRate: { ideal: 30 }
+      });
+      secLog('info', `Resolution changed to ${label} (in-place)`);
+      return;
+    } catch(e) { /* device doesn't support in-place resize — fall through */ }
+  }
+  // Fallback: full reinit (will briefly interrupt stream — unavoidable on some devices)
+  secLog('info', `Resolution changing to ${label} (full reinit)`);
+  await initStream();
 }
 
 // ── Security controls ──────────────────────────────────────────
@@ -1172,10 +1242,10 @@ function authAndConnect(targetId, token) {
       authDone = true;
       setRxLabel('Authenticated — opening stream…');
       rxDataConn = dataConn; // keep open — don't close!
-      // Start heartbeat pings every 5 seconds
+      // Start heartbeat pings every 4 seconds (camera times out at 12s)
       rxPingInterval = setInterval(() => {
         try { dataConn.send({ type: 'ping' }); } catch(e) {}
-      }, 5000);
+      }, 4000);
       requestStream(targetId);
     } else if (data?.type === 'auth-fail') {
       showRxError(data.reason === 'key'
