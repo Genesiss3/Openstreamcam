@@ -148,7 +148,24 @@
       .ctrl-btn{width:44px;height:44px;}
     }
 
-    /* Chat overlay in OBS receiver */
+    /* Twitch alert banners */
+    #twitch-alerts{position:absolute;top:62px;left:12px;right:12px;z-index:35;display:flex;flex-direction:column;gap:8px;pointer-events:none;}
+    .tw-alert{display:flex;align-items:center;gap:12px;background:rgba(18,18,22,.96);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(168,85,247,.25);border-left:3px solid var(--accent);border-radius:14px;padding:12px 14px;transform:translateY(-110%) scale(.95);opacity:0;transition:transform .35s cubic-bezier(.34,1.56,.64,1),opacity .25s;pointer-events:all;}
+    .tw-alert.show{transform:translateY(0) scale(1);opacity:1;}
+    .tw-alert-icon{font-size:22px;flex-shrink:0;line-height:1;}
+    .tw-alert-body{flex:1;min-width:0;}
+    .tw-alert-title{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .tw-alert-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+
+    /* Twitch connection state in settings */
+    .twitch-btn{width:100%;padding:12px;border-radius:10px;border:none;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .14s;}
+    .twitch-btn:active{opacity:.75;}
+    .twitch-btn.connect{background:#9147ff;color:#fff;}
+    .twitch-btn.disconnect{background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3);}
+    .twitch-btn.action{background:var(--surface);color:var(--text);border:1px solid var(--border2);}
+    .twitch-connected-row{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);}
+    .client-id-input{flex:1;background:rgba(0,0,0,.3);border:1px solid var(--border2);border-radius:8px;padding:8px 10px;color:var(--text);font-family:var(--font);font-size:12px;outline:none;min-width:0;}
+    .client-id-input:focus{border-color:var(--accent);}
     #chat-overlay{position:absolute;bottom:24px;left:16px;right:16px;pointer-events:none;display:flex;flex-direction:column;gap:7px;max-height:38%;overflow:hidden;justify-content:flex-end;}
     .chat-msg{display:inline-flex;align-items:baseline;gap:7px;background:rgba(0,0,0,.68);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);padding:8px 14px;border-radius:22px;font-family:var(--font);font-size:15px;color:#fff;max-width:90%;word-break:break-word;align-self:flex-start;animation:chatIn .25s ease-out forwards;}
     .chat-msg.fading{animation:chatOut .8s ease-out forwards;}
@@ -204,6 +221,7 @@
   <div id="video-wrap">
     <video id="local-video" autoplay muted playsinline></video>
     <div class="emoji-stage" id="emoji-stage-cam"></div>
+    <div id="twitch-alerts"></div>
     <div class="video-fade"></div>
   </div>
 
@@ -223,6 +241,9 @@
       </button>
       <button class="ctrl-btn" id="btn-torch" style="display:none" onclick="toggleTorch()">
         <svg viewBox="0 0 24 24"><path d="M9.663 17h4.673M12 3v1M6.343 6.343l-.707-.707M3 12H2M21 12h-1M18.364 6.343l.707-.707M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>
+      </button>
+      <button class="ctrl-btn" id="btn-clip" style="display:none" onclick="createClip()">
+        <svg viewBox="0 0 24 24"><path d="M6.99 11L3 17.01 7.01 21l4-6.02M21 21l-4-6.02M15 7V3"/><circle cx="15" cy="10" r="3"/><circle cx="9" cy="14" r="3"/></svg>
       </button>
       <button class="ctrl-btn" id="btn-emoji" onclick="toggleEmojiTray()">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 13s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9" stroke-width="3"/><line x1="15" y1="9" x2="15.01" y2="9" stroke-width="3"/></svg>
@@ -281,8 +302,45 @@
     <div class="sheet-group">
       <div class="sheet-group-label">Twitch</div>
       <div class="sheet-card">
-        <div class="sheet-row">
-          <div><div class="row-label">Channel Name</div><div class="row-sub">Shows chat in OBS overlay</div></div>
+
+        <!-- NOT CONNECTED -->
+        <div id="twitch-not-connected">
+          <div class="sheet-row" style="gap:8px">
+            <div style="flex-shrink:0"><div class="row-label">Client ID</div><div class="row-sub">From dev.twitch.tv/console</div></div>
+            <input class="client-id-input" id="twitch-client-id" type="text" placeholder="paste client id" autocomplete="off" autocorrect="off" autocapitalize="none">
+          </div>
+          <div style="padding:8px 16px 14px">
+            <button class="twitch-btn connect" onclick="connectTwitch()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.149 0l-1.612 4.119v16.836h5.731v3.045h3.224l3.045-3.045h4.657l6.269-6.269v-14.686h-21.314zm19.164 13.612l-3.582 3.582h-5.731l-3.045 3.045v-3.045h-4.836v-15.045h17.194v11.463zm-3.582-7.343v6.262h-2.149v-6.262h2.149zm-5.731 0v6.262h-2.149v-6.262h2.149z"/></svg>
+              Connect Twitch
+            </button>
+          </div>
+        </div>
+
+        <!-- CONNECTED -->
+        <div id="twitch-connected" style="display:none">
+          <div class="twitch-connected-row">
+            <div>
+              <div class="row-label" style="color:var(--green)">&#x25CF; Connected</div>
+              <div class="row-sub" id="twitch-username-display">Loading…</div>
+            </div>
+            <button class="twitch-btn disconnect" style="width:auto;padding:8px 14px;font-size:12px" onclick="disconnectTwitch()">Disconnect</button>
+          </div>
+          <div style="padding:10px 16px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <button class="twitch-btn action" onclick="createClip()">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.99 11L3 17.01 7.01 21l4-6.02M21 21l-4-6.02M15 7V3"/><circle cx="15" cy="10" r="3"/><circle cx="9" cy="14" r="3"/></svg>
+              Clip (30s)
+            </button>
+            <button class="twitch-btn action" onclick="createVodMarker()">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+              VOD Marker
+            </button>
+          </div>
+        </div>
+
+        <!-- always visible -->
+        <div class="sheet-row" style="border-top:1px solid var(--border)">
+          <div><div class="row-label">Channel Name</div><div class="row-sub">For chat overlay in OBS</div></div>
           <input class="channel-input" id="channel-input" type="text" placeholder="your_channel" autocomplete="off" autocorrect="off" autocapitalize="none" oninput="saveChannel(this.value)">
         </div>
         <div class="sheet-row">
@@ -384,6 +442,21 @@ let rxPingInterval=null,rxDataConn=null,wakeLock=null;
 let ircWs=null,offlineTimer=null,offlineSince=null,rxPendingDc=null;
 
 IS_RX?startReceiver(CAM_ID,RX_TOKEN):startCamera();
+
+// Handle Twitch OAuth redirect (fires before camera/receiver init is done)
+handleOAuthCallback();
+
+// Restore Twitch session if token already stored
+(function restoreTwitchSession(){
+  const token=localStorage.getItem('sc_twitch_token');
+  const login=localStorage.getItem('sc_twitch_login');
+  const clientId=localStorage.getItem('sc_twitch_client_id');
+  if(clientId){const el=document.getElementById('twitch-client-id');if(el)el.value=clientId;}
+  if(token&&login){
+    showTwitchConnected(login);
+    validateAndInitTwitch(token); // re-validates and starts EventSub
+  }
+})();
 
 function generateKey(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let k='',a=new Uint8Array(12);crypto.getRandomValues(a);for(let i=0;i<12;i++){if(i>0&&i%4===0)k+='-';k+=c[a[i]%c.length];}return k;}
 async function hashToken(key){const d=new TextEncoder().encode(key.toUpperCase().replace(/-/g,'').trim());const b=await crypto.subtle.digest('SHA-256',d);return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');}
@@ -914,6 +987,217 @@ function addChatMsg({name,color,text}){
 }
 
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ════════════════════════════════════════════════════════════
+//  TWITCH INTEGRATION
+// ════════════════════════════════════════════════════════════
+
+let eventSubWs=null, alertQueue=[], alertBusy=false;
+
+// ── OAuth ─────────────────────────────────────────────────
+function connectTwitch(){
+  const clientId=(document.getElementById('twitch-client-id')?.value||'').trim();
+  if(!clientId){showToast('Paste your Client ID first','red');return;}
+  localStorage.setItem('sc_twitch_client_id',clientId);
+  const base=window.location.href.split('?')[0].split('#')[0];
+  const scopes=[
+    'moderator:read:followers',
+    'channel:read:subscriptions',
+    'bits:read',
+    'channel:read:redemptions',
+    'clips:edit',
+    'channel:manage:broadcast'
+  ].join(' ');
+  window.location.href=`https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(base)}&response_type=token&scope=${encodeURIComponent(scopes)}`;
+}
+
+function disconnectTwitch(){
+  ['sc_twitch_token','sc_twitch_user_id','sc_twitch_login'].forEach(k=>localStorage.removeItem(k));
+  if(eventSubWs){try{eventSubWs.close();}catch(e){}eventSubWs=null;}
+  document.getElementById('twitch-not-connected').style.display='';
+  document.getElementById('twitch-connected').style.display='none';
+  document.getElementById('btn-clip').style.display='none';
+  showToast('Twitch disconnected','yellow');
+}
+
+function handleOAuthCallback(){
+  const hash=new URLSearchParams(window.location.hash.replace('#',''));
+  const token=hash.get('access_token');
+  if(!token)return;
+  localStorage.setItem('sc_twitch_token',token);
+  // Clean the token from URL without reload
+  history.replaceState(null,'',window.location.pathname);
+  validateAndInitTwitch(token);
+}
+
+async function validateAndInitTwitch(token){
+  if(!token)return;
+  try{
+    const r=await fetch('https://id.twitch.tv/oauth2/validate',{
+      headers:{Authorization:`OAuth ${token}`}
+    });
+    if(!r.ok){localStorage.removeItem('sc_twitch_token');return;}
+    const d=await r.json();
+    localStorage.setItem('sc_twitch_user_id',d.user_id);
+    localStorage.setItem('sc_twitch_login',d.login);
+    showTwitchConnected(d.login);
+    initEventSub();
+  }catch(e){console.warn('Twitch validate failed',e);}
+}
+
+function showTwitchConnected(login){
+  document.getElementById('twitch-not-connected').style.display='none';
+  document.getElementById('twitch-connected').style.display='';
+  document.getElementById('twitch-username-display').textContent=login;
+  document.getElementById('btn-clip').style.display='flex';
+}
+
+// ── EventSub WebSocket ─────────────────────────────────────
+function initEventSub(){
+  const token=localStorage.getItem('sc_twitch_token');
+  const userId=localStorage.getItem('sc_twitch_user_id');
+  const clientId=localStorage.getItem('sc_twitch_client_id');
+  if(!token||!userId||!clientId)return;
+  if(eventSubWs){try{eventSubWs.close();}catch(e){}}
+
+  eventSubWs=new WebSocket('wss://eventsub.wss.twitch.tv/ws');
+
+  eventSubWs.onmessage=async e=>{
+    const msg=JSON.parse(e.data);
+    const type=msg.metadata?.message_type;
+
+    if(type==='session_welcome'){
+      const sessionId=msg.payload.session.id;
+      // Subscribe to all events within the 10s window
+      const sub=(evType,ver,cond)=>fetch('https://api.twitch.tv/helix/eventsub/subscriptions',{
+        method:'POST',
+        headers:{Authorization:`Bearer ${token}`,'Client-Id':clientId,'Content-Type':'application/json'},
+        body:JSON.stringify({type:evType,version:ver,condition:cond,transport:{method:'websocket',session_id:sessionId}})
+      });
+      await sub('channel.follow','2',{broadcaster_user_id:userId,moderator_user_id:userId});
+      await sub('channel.subscribe','1',{broadcaster_user_id:userId});
+      await sub('channel.subscription.message','1',{broadcaster_user_id:userId});
+      await sub('channel.subscription.gift','1',{broadcaster_user_id:userId});
+      await sub('channel.cheer','1',{broadcaster_user_id:userId});
+      await sub('channel.raid','1',{to_broadcaster_user_id:userId});
+    }
+
+    if(type==='session_reconnect'){
+      // Twitch wants us to reconnect to a new URL
+      const newUrl=msg.payload.session.reconnect_url;
+      eventSubWs.close();
+      eventSubWs=new WebSocket(newUrl);
+    }
+
+    if(type==='notification') handleEventSubNotification(msg.payload);
+  };
+
+  eventSubWs.onclose=()=>{
+    // Reconnect after 5s unless intentionally closed
+    if(localStorage.getItem('sc_twitch_token')){
+      setTimeout(initEventSub,5000);
+    }
+  };
+  eventSubWs.onerror=()=>{};
+}
+
+function handleEventSubNotification(payload){
+  const type=payload.subscription.type;
+  const ev=payload.event;
+
+  if(type==='channel.follow'){
+    queueAlert('💜','New Follower',ev.user_name+' just followed!');
+  }
+  else if(type==='channel.subscribe'){
+    if(ev.is_gift)return; // gift handled separately
+    const tier=ev.tier==='3000'?'Tier 3':ev.tier==='2000'?'Tier 2':'';
+    queueAlert('⭐','New Subscriber',ev.user_name+(tier?' — '+tier:'')+' subscribed!');
+  }
+  else if(type==='channel.subscription.message'){
+    const months=ev.cumulative_months;
+    queueAlert('⭐','Resubscribed',`${ev.user_name} — ${months} months!`);
+  }
+  else if(type==='channel.subscription.gift'){
+    const count=ev.total;
+    queueAlert('🎁','Gift Subs',`${ev.user_name} gifted ${count} sub${count>1?'s':''}!`);
+  }
+  else if(type==='channel.cheer'){
+    queueAlert('💎','Bits',`${ev.user_name} cheered ${ev.bits} bits!`);
+  }
+  else if(type==='channel.raid'){
+    queueAlert('🚀','Raid!',`${ev.from_broadcaster_user_name} raided with ${ev.viewers} viewers!`);
+  }
+}
+
+// ── Alert display ──────────────────────────────────────────
+function queueAlert(icon,title,sub){
+  alertQueue.push({icon,title,sub});
+  if(!alertBusy)processAlertQueue();
+}
+
+function processAlertQueue(){
+  if(!alertQueue.length){alertBusy=false;return;}
+  alertBusy=true;
+  const {icon,title,sub}=alertQueue.shift();
+  const container=document.getElementById('twitch-alerts');
+  if(!container){alertBusy=false;return;}
+
+  const el=document.createElement('div');
+  el.className='tw-alert';
+  el.innerHTML=`<div class="tw-alert-icon">${icon}</div><div class="tw-alert-body"><div class="tw-alert-title">${escHtml(title)}</div><div class="tw-alert-sub">${escHtml(sub)}</div></div>`;
+  container.appendChild(el);
+
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>el.classList.add('show'));
+  });
+
+  setTimeout(()=>{
+    el.classList.remove('show');
+    setTimeout(()=>{el.remove();processAlertQueue();},400);
+  },4500);
+}
+
+// ── Clip + VOD marker ──────────────────────────────────────
+async function createClip(){
+  const token=localStorage.getItem('sc_twitch_token');
+  const userId=localStorage.getItem('sc_twitch_user_id');
+  const clientId=localStorage.getItem('sc_twitch_client_id');
+  if(!token||!userId){showToast('Connect Twitch first','red');return;}
+  showToast('✂️ Creating clip…','purple');
+  try{
+    const r=await fetch(`https://api.twitch.tv/helix/clips?broadcaster_id=${userId}`,{
+      method:'POST',
+      headers:{Authorization:`Bearer ${token}`,'Client-Id':clientId}
+    });
+    const d=await r.json();
+    if(d.data?.[0]?.id){
+      showToast('✓ Clip created!','purple');
+    } else if(r.status===404||r.status===422){
+      showToast('Stream must be live to clip','red');
+    } else {
+      showToast('Clip failed — trying marker','yellow');
+      await createVodMarker();
+    }
+  }catch(e){showToast('Clip failed','red');}
+}
+
+async function createVodMarker(){
+  const token=localStorage.getItem('sc_twitch_token');
+  const userId=localStorage.getItem('sc_twitch_user_id');
+  const clientId=localStorage.getItem('sc_twitch_client_id');
+  if(!token||!userId){showToast('Connect Twitch first','red');return;}
+  showToast('📍 Adding VOD marker…','purple');
+  try{
+    const r=await fetch('https://api.twitch.tv/helix/streams/markers',{
+      method:'POST',
+      headers:{Authorization:`Bearer ${token}`,'Client-Id':clientId,'Content-Type':'application/json'},
+      body:JSON.stringify({user_id:userId,description:'StreamCam'})
+    });
+    const d=await r.json();
+    if(d.data?.[0]){showToast('📍 VOD marker added!','purple');}
+    else{showToast('Must be live for marker','red');}
+  }catch(e){showToast('Marker failed','red');}
+}
 
 </script>
 </body>
