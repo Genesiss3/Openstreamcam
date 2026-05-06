@@ -426,6 +426,14 @@
 <div id="toast"></div>
 
 <script>
+// Capture OAuth token from hash BEFORE stripping (must run before history.replaceState)
+const _oauthHash=new URLSearchParams(window.location.hash.replace('#',''));
+const _oauthToken=_oauthHash.get('access_token');
+if(_oauthToken)localStorage.setItem('sc_twitch_token',_oauthToken);
+
+// Strip any URL hash immediately to prevent browser zoom/scroll jump on OAuth return
+if(window.location.hash)history.replaceState(null,'',window.location.pathname+window.location.search);
+
 const params=new URLSearchParams(window.location.search);
 const CAM_ID=params.get('camera'),RX_TOKEN=params.get('token');
 const CHANNEL=params.get('channel')||'';
@@ -1008,7 +1016,8 @@ function connectTwitch(){
     'clips:edit',
     'channel:manage:broadcast'
   ].join(' ');
-  window.location.href=`https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(base)}&response_type=token&scope=${encodeURIComponent(scopes)}`;
+  // force_verify=true always shows the Twitch account picker, allowing switching accounts
+  window.location.href=`https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(base)}&response_type=token&scope=${encodeURIComponent(scopes)}&force_verify=true`;
 }
 
 function disconnectTwitch(){
@@ -1021,13 +1030,17 @@ function disconnectTwitch(){
 }
 
 function handleOAuthCallback(){
-  const hash=new URLSearchParams(window.location.hash.replace('#',''));
-  const token=hash.get('access_token');
-  if(!token)return;
-  localStorage.setItem('sc_twitch_token',token);
-  // Clean the token from URL without reload
-  history.replaceState(null,'',window.location.pathname);
-  validateAndInitTwitch(token);
+  // Token already captured from hash at page load top — just validate if present
+  const token=localStorage.getItem('sc_twitch_token');
+  const prevLogin=localStorage.getItem('sc_twitch_login');
+  // Only run full validation if this is a fresh OAuth return (no login yet stored,
+  // or the token was just set from the hash this load)
+  if(_oauthToken){
+    // Fresh OAuth return — clear old session first, then validate new token
+    localStorage.removeItem('sc_twitch_login');
+    localStorage.removeItem('sc_twitch_user_id');
+    validateAndInitTwitch(_oauthToken);
+  }
 }
 
 async function validateAndInitTwitch(token){
